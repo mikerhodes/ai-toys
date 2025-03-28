@@ -1,17 +1,21 @@
+"""
+copyeditor.py
+
+This toy allows AI copyediting of files. The thing that makes it
+ergonomic in my workflow is that it automatically loads the
+last edited file at startup and uses that as the copy to evaluate,
+avoiding the need to manually find the file --- because it is,
+without fail, going to be the one you edited last because presumably
+you are editing it concurrently with the copy edit session.
+"""
+
 import logging
 import os
-import time
 
 from typing import Optional
 
 import anthropic
 import streamlit as st
-from watchdog.observers import Observer
-from watchdog.events import (
-    FileCreatedEvent,
-    FileModifiedEvent,
-    FileSystemEventHandler,
-)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -19,6 +23,28 @@ logger = logging.getLogger(__name__)
 PATH = "/Users/mike/code/gh/mikerhodes/dx13-hugo/content"
 
 st.set_page_config(layout="wide")
+
+PROMPT = """
+You are an AI copyeditor with a keen eye for detail and a deep understanding of language, style, and grammar. Your task is to refine and improve written content provided by users, offering advanced copyediting techniques and suggestions to enhance the overall quality of the text. When a user submits a piece of writing, follow these steps:
+
+1. Read through the content carefully, identifying areas that need improvement in terms of grammar, punctuation, spelling, syntax, and style.
+
+2. Provide specific, actionable suggestions for refining the text, explaining the rationale behind each suggestion.
+
+3. Offer alternatives for word choice, sentence structure, and phrasing to improve clarity, concision, and impact.
+
+4. Ensure the tone and voice of the writing are consistent and appropriate for the intended audience of senior programmers.
+
+5. Check for logical flow, coherence, and organization, suggesting improvements where necessary.
+
+6. Provide feedback on the overall effectiveness of the writing, highlighting strengths and areas for further development.
+
+Your suggestions should be constructive, insightful, and designed to help the user elevate the quality of their writing.
+
+Avoid use of headings in your response.
+
+The date today is 2025-03-26.
+"""
 
 
 def find_most_recent_file(directory) -> Optional[str]:
@@ -74,66 +100,14 @@ def load_markdown_without_frontmatter(file_path: str):
     return "".join(content)
 
 
-class MarkdownHandler(FileSystemEventHandler):
-    def __init__(self):
-        self.markdown_content = ""
-        self.last_updated_file = ""
-        self.last_update_time = None
-
-    def on_modified(self, event):
-        logger.info(event)
-        match event:
-            case FileModifiedEvent():
-                p = str(event.src_path)
-                self._on_event(p)
-
-    def on_created(self, event):
-        logger.info(event)
-        match event:
-            case FileCreatedEvent():
-                p = str(event.src_path)
-                self._on_event(p)
-
-    def _on_event(self, p: str):
-        if p.endswith(".md"):
-            try:
-                self.markdown_content = load_markdown_without_frontmatter(p)
-                self.last_updated_file = os.path.basename(p)
-                self.last_update_time = time.strftime("%H:%M:%S")
-            except Exception as e:
-                print(f"Error reading file: {e}")
-
-
-logger.info("hello")
-
-# Initialize the file watcher in session state
-# if "watcher_initialized" not in st.session_state:
-#     logger.info("Starting watcher on %s", PATH)
-#     st.session_state.handler = MarkdownHandler()
-#     st.session_state.watcher_initialized = True
-
-#     # Directory to monitor
-#     path_to_watch = PATH
-
-#     # Create the directory if it doesn't exist
-#     os.makedirs(path_to_watch, exist_ok=True)
-
-#     # Set up the observer in a background thread
-#     observer = Observer()
-#     observer.schedule(
-#         st.session_state.handler, path_to_watch, recursive=True
-#     )
-#     observer.daemon = (
-#         True  # Set as daemon so it stops when the main thread stops
-#     )
-#     observer.start()
-#     logger.info("Started watcher on %s", PATH)
-
+if "markdown_content" not in st.session_state:
+    st.session_state["markdown_content"] = ""
 if "copyedited_content" not in st.session_state:
     st.session_state["copyedited_content"] = ""
 
+#
 # Streamlit UI
-st.title("Claude Copyeditor")
+#
 
 
 def copyedit_with_claude():
@@ -158,31 +132,11 @@ def copyedit_with_claude():
                 model="claude-3-7-sonnet-latest",  # or another Claude model
                 max_tokens=4000,
                 temperature=0.0,  # Keep it deterministic for copyediting
-                system="""
-You are an AI copyeditor with a keen eye for detail and a deep understanding of language, style, and grammar. Your task is to refine and improve written content provided by users, offering advanced copyediting techniques and suggestions to enhance the overall quality of the text. When a user submits a piece of writing, follow these steps:
-
-1. Ignore the markdown frontmatter, if there is any.
-
-2. Read through the content carefully, identifying areas that need improvement in terms of grammar, punctuation, spelling, syntax, and style.
-
-3. Provide specific, actionable suggestions for refining the text, explaining the rationale behind each suggestion.
-
-4. Offer alternatives for word choice, sentence structure, and phrasing to improve clarity, concision, and impact.
-
-5. Ensure the tone and voice of the writing are consistent and appropriate for the intended audience of senior programmers.
-
-6. Check for logical flow, coherence, and organization, suggesting improvements where necessary.
-
-7. Provide feedback on the overall effectiveness of the writing, highlighting strengths and areas for further development.
-
-Your suggestions should be constructive, insightful, and designed to help the user elevate the quality of their writing.
-
-The date today is 2025-03-26.
-                """,
+                system=PROMPT,
                 messages=[
                     {
                         "role": "user",
-                        "content": f"Please copyedit this markdown text:\n\n{st.session_state.handler.markdown_content}",
+                        "content": f"Please copyedit this markdown text:\n\n<content>{st.session_state.markdown_content}</content>",
                     }
                 ],
             )
@@ -198,48 +152,39 @@ The date today is 2025-03-26.
 tab1, tab2 = st.columns(2)
 
 with tab1:
-    # Display file info if content exists
-    if st.session_state.handler.markdown_content:
-        st.success(
-            f"Last updated: {st.session_state.handler.last_updated_file} at {st.session_state.handler.last_update_time}"
+    f = find_most_recent_file(PATH)
+
+    if f:
+        st.info(
+            f"Loaded file `{f.lstrip(PATH)}`.", icon=":material/article:"
         )
+
     foo = st.empty()
 
-    if f := find_most_recent_file(PATH):
-        logger.info(f)
-        st.markdown(load_markdown_without_frontmatter(f))
-
     # Display the original markdown content
-    # @st.fragment(run_every=1)
-    # def display_markdown():
-    #     # st.session_state.running = True
-    #     # logger.info("dm")
-    #     with foo:
-    #         if st.session_state.handler.markdown_content:
-    #             st.markdown(st.session_state.handler.markdown_content)
-    #         else:
-    #             st.info("Waiting for markdown files to be modified...")
+    @st.fragment(run_every=1)
+    def display_markdown():
+        with foo:
+            if f:
+                st.session_state.markdown_content = (
+                    load_markdown_without_frontmatter(f)
+                )
+                st.container(border=True).markdown(
+                    st.session_state.markdown_content
+                )
 
     # if "running" not in st.session_state:
-    # display_markdown()
-    # if st.session_state.handler.markdown_content:
-    #     st.markdown(st.session_state.handler.markdown_content)
-    # else:
-    #     st.info("Waiting for markdown files to be modified...")
+    display_markdown()
 
 with tab2:
-    # Add a button to copyedit the content
+    if not st.session_state.copyedited_content:
+        st.info(
+            "Click the 'Copyedit with Claude' button to see the copyedited version here.",
+            icon=":material/robot_2:",
+        )
     if st.button("Copyedit with Claude", use_container_width=True):
         copyedit_with_claude()
-
     if st.session_state.copyedited_content:
-        st.markdown(st.session_state.copyedited_content)
-    else:
-        st.info(
-            "Click the 'Copyedit with Claude' button to see the copyedited version here."
+        st.container(border=True).markdown(
+            st.session_state.copyedited_content
         )
-
-
-# Display monitoring status
-st.subheader("Monitor Status")
-st.write(f"Monitoring directory: {os.path.abspath(PATH)}")
