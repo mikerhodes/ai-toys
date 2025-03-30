@@ -67,18 +67,18 @@ def print_working_directory() -> str:
     return str(pwd.absolute())
 
 
-def read_file(fpath: str) -> str:
-    p = Path(fpath).absolute()
+def read_file(path: str) -> str:
+    p = Path(path).absolute()
     if not p.exists():
-        return f"ERROR: Path {fpath} does not exist"
+        return f"ERROR: Path {path} does not exist"
     if jail not in p.parents:
         return f"ERROR: Path {p} must have {jail} as an ancestor"
-    with open(fpath, "r") as f:
+    with open(path, "r") as f:
         return f.read()
 
 
-def list_directory_tree(root_dir):
-    root = Path(root_dir)
+def list_directory_tree(path: str) -> str:
+    root = Path(path)
     if not root.exists():
         return f"ERROR: Path {root} does not exist"
     if not root.is_dir():
