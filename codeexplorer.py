@@ -4,9 +4,13 @@ import json
 import logging
 import os
 from pathlib import Path
+import textwrap
 from typing import Dict, cast
 
 import anthropic
+from rich.console import Console
+from rich.markdown import Markdown
+from rich.panel import Panel
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -236,10 +240,22 @@ Once you have found the important functions, print out an explanation of the cod
 - The key functions in the program.
 """
 prompt_message = {"role": "user", "content": prompt}
-print(f"\n{'=' * 50}\nInitial prompt: {prompt}\n{'=' * 50}")
 
 chat_history = []
 num_turns = 0
+
+console = Console()
+
+console.print(Panel(Markdown(prompt), title="Prompt"))
+
+# dedented markdown to use when formatting each tool use message
+tool_use_markdown = """
+{text}
+
+Tool Used: `{tool_name}`
+
+Tool Input: `{tool_input}`
+"""
 
 for i in range(0, max_turns):
     num_turns += 1
@@ -275,14 +291,26 @@ for i in range(0, max_turns):
     print(f"Content: {message.content}")
 
     if message.stop_reason == "tool_use":
+        text_block = next(
+            block for block in message.content if block.type == "text"
+        )
         tool_use = next(
             block for block in message.content if block.type == "tool_use"
         )
         tool_name = tool_use.name
         tool_input = cast(Dict[str, str], tool_use.input)
 
-        print(f"\nTool Used: {tool_name}")
-        print(f"Tool Input: {tool_input}")
+        md = Markdown(
+            tool_use_markdown.format(
+                text=text_block.text,
+                tool_name=tool_name,
+                tool_input=tool_input,
+            )
+        )
+        console.print(Panel(md, title="Turn"))
+
+        # print(f"\nTool Used: {tool_name}")
+        # print(f"Tool Input: {tool_input}")
 
         tool_result = process_tool_call(tool_name, tool_input)
 
@@ -307,9 +335,14 @@ for i in range(0, max_turns):
         chat_history.append(
             {"role": "assistant", "content": message.content}
         )
-        print(message.content[0].text)
+        text_block = next(
+            block for block in message.content if block.type == "text"
+        )
+
+        md = Markdown(text_block.text)
+        console.print(Panel(md, title="Code exploration result"))
         break
 
 logger.info("Config: max turns: %d, path: %s", max_turns, jail)
 logger.info("Took %d turns", num_turns)
-logger.info("Using %s model", chat_model)
+logger.info("Used %s model", chat_model)
