@@ -1,4 +1,5 @@
 import argparse
+import copy
 import json
 import logging
 import os
@@ -35,7 +36,7 @@ if not api_key:
     exit(1)
 client = anthropic.Anthropic(api_key=api_key)
 MODEL = "claude-3-7-sonnet-latest"
-MODEL = "claude-3-5-haiku-latest"
+# MODEL = "claude-3-5-haiku-latest"
 
 # Let Claude expore this folder for now
 pwd = Path(args.path).absolute()
@@ -152,32 +153,29 @@ tools = [
             "required": ["path"],
         },
     },
-    {
-        "name": "add_memory",
-        "description": """
-            Add a memory about the code base. The data in memory will be sent back to you in your prompt. To avoid calling tools again and again, use the memory to note down information about the results of each step.
-
-            Examples:
-
-            <memory>
-            main.py: this contains the functions main, read_foo, write_bar. main contains the main program code. read_foo reads the foo file from disk. write_bar writes to the cloud service bar.
-            </memory>
-
-            <memory>
-            the files in /the/root/path are main.py, helper.py, readme.md
-            </memory>
-        """,
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "memory": {
-                    "type": "string",
-                    "description": "Memory to add",
-                }
-            },
-            "required": ["memory"],
-        },
-    },
+    # {
+    #     "name": "add_memory",
+    #     "description": """
+    #         Add a memory about the code base. The data in memory will be sent back to you in your prompt. To avoid calling tools again and again, use the memory to note down information about the results of each step.
+    #         Examples:
+    #         <memory>
+    #         main.py: this contains the functions main, read_foo, write_bar. main contains the main program code. read_foo reads the foo file from disk. write_bar writes to the cloud service bar.
+    #         </memory>
+    #         <memory>
+    #         the files in /the/root/path are main.py, helper.py, readme.md
+    #         </memory>
+    #     """,
+    #     "input_schema": {
+    #         "type": "object",
+    #         "properties": {
+    #             "memory": {
+    #                 "type": "string",
+    #                 "description": "Memory to add",
+    #             }
+    #         },
+    #         "required": ["memory"],
+    #     },
+    # },
 ]
 
 
@@ -205,26 +203,8 @@ You will initially be in the root directory of the project. Use the print_workin
 
 The best way to explore the code is to list the files in the directory using the list_working_directory tool. Choose an important looking code file, like main.py, and read it. See if it tells you the purpose of the program. Read other files if needed to understand the purpose of the program. You might also look at README.md to understand the purpose of the program.
 
-Once you've found the purpose of the program, read any additional files to find the important functions.
+Once you've found the purpose of the program, read any additional files to find the important functions. Stop reading files once the purpose of the program is clear.
 
-Every time you call a tool, use the add_memory tool to add a memory if the information will be needed again. This is very important because the tool response will not be included in future turns! Use the add_memory tool right after getting the response to another tool.
-
-Examples of things you will need to remember:
-
-- Remember the root directory.
-- Remember the content of directories after the list_directory_content tool. Remember to include the directory path in the memory.
-- Summarise files, including information about the functions in the files that seem important.
-
-For example:
-
-<memory>
-main.py: this contains the functions main, read_foo, write_bar. main contains the main program code. read_foo reads the foo file from disk. write_bar writes to the cloud service bar.
-</memory>
-
-<memory>
-/home/mike/code/app contents are main.py, README.md, foo.txt, processor.py
-</memory>
- 
 Once you have found the important functions, print out an explanation of the codebase:
 
 - The purpose of the entire program.
@@ -240,6 +220,11 @@ for i in range(0, max_turns):
 
     memories_message = "\n".join([f"<memory>{x}</memory>" for x in memories])
 
+    cache_prompt = None
+    if chat_history:
+        cache_prompt = copy.deepcopy(chat_history[-1])
+        cache_prompt["content"][0]["cache_control"] = {"type": "ephemeral"}
+
     message = client.messages.create(
         model=MODEL,
         max_tokens=4096,
@@ -247,13 +232,14 @@ for i in range(0, max_turns):
             prompt_message,
             {"role": "user", "content": memories_message},
         ]
-        + chat_history,
+        + chat_history[:-1]
+        + ([cache_prompt] if cache_prompt else []),
         tools=tools,
     )
 
     # TODO need to strip out files read after they are memorised
-    if len(chat_history) > 8:
-        chat_history = chat_history[-8:]
+    # if len(chat_history) > 8:
+    #     chat_history = chat_history[-8:]
 
     print(f"Length of chat_history: {len(chat_history)}")
 
@@ -273,7 +259,7 @@ for i in range(0, max_turns):
 
         tool_result = process_tool_call(tool_name, tool_input)
 
-        print(f"Tool Result: {tool_result[:200]}")
+        # print(f"Tool Result: {tool_result[:200]}")
 
         chat_history.append(
             {"role": "assistant", "content": message.content}
@@ -294,5 +280,5 @@ for i in range(0, max_turns):
         chat_history.append(
             {"role": "assistant", "content": message.content}
         )
-        print(message.content)
+        print(message.content[0].text)
         break
