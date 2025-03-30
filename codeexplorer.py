@@ -113,12 +113,12 @@ def list_directory_tree(root_dir):
     return "\n".join(result)
 
 
-memories = []
+# memories = []
 
 
-def add_memory(memory: str) -> str:
-    memories.append(memory)
-    return "Added memory"
+# def add_memory(memory: str) -> str:
+#     memories.append(memory)
+#     return "Added memory"
 
 
 tools = [
@@ -217,8 +217,8 @@ def process_tool_call(tool_name: str, tool_input: Dict[str, str]) -> str:
             return list_directory_tree(tool_input["path"])
         case "read_file":
             return read_file(tool_input["path"])
-        case "add_memory":
-            return add_memory(tool_input["memory"])
+        # case "add_memory":
+        #     return add_memory(tool_input["memory"])
     return f"Error: no tool with name {tool_name}"
 
 
@@ -259,7 +259,7 @@ for i in range(0, max_turns):
     num_turns += 1
     print(f"\n{'=' * 50}")
 
-    memories_message = "\n".join([f"<memory>{x}</memory>" for x in memories])
+    # memories_message = "\n".join([f"<memory>{x}</memory>" for x in memories])
 
     # For each turn, we want to tell the Anthropic API that we
     # want to cache up to this point, so we can reuse it on the
@@ -275,7 +275,7 @@ for i in range(0, max_turns):
     messages = (
         [
             {"role": "user", "content": prompt},
-            {"role": "user", "content": memories_message},
+            # {"role": "user", "content": memories_message},
         ]
         + chat_history[:-1]
         + ([cache_prompt] if cache_prompt else [])
