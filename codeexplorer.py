@@ -1,13 +1,12 @@
 import argparse
 import copy
-import json
 import logging
 import os
 from pathlib import Path
-import textwrap
-from typing import Dict, cast
+from typing import Dict, Iterable, cast
 
 import anthropic
+from anthropic.types import MessageParam, ToolUnionParam
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -239,7 +238,6 @@ Once you have found the important functions, print out an explanation of the cod
 - The purpose of the entire program.
 - The key functions in the program.
 """
-prompt_message = {"role": "user", "content": prompt}
 
 chat_history = []
 num_turns = 0
@@ -263,21 +261,31 @@ for i in range(0, max_turns):
 
     memories_message = "\n".join([f"<memory>{x}</memory>" for x in memories])
 
+    # For each turn, we want to tell the Anthropic API that we
+    # want to cache up to this point, so we can reuse it on the
+    # next turn. We don't want to end up with the cache directive
+    # in every turn, however, so create a copy of the last message
+    # and add the cache control to it --- this ensures that we only
+    # ever have the cache control block in the latest message.
     cache_prompt = None
     if chat_history:
         cache_prompt = copy.deepcopy(chat_history[-1])
         cache_prompt["content"][0]["cache_control"] = {"type": "ephemeral"}
 
-    message = client.messages.create(
-        model=chat_model,
-        max_tokens=4096,
-        messages=[
-            prompt_message,
+    messages = (
+        [
+            {"role": "user", "content": prompt},
             {"role": "user", "content": memories_message},
         ]
         + chat_history[:-1]
-        + ([cache_prompt] if cache_prompt else []),
-        tools=tools,
+        + ([cache_prompt] if cache_prompt else [])
+    )
+
+    message = client.messages.create(
+        model=chat_model,
+        max_tokens=4096,
+        messages=cast(Iterable[MessageParam], messages),
+        tools=cast(Iterable[ToolUnionParam], tools),
     )
 
     # TODO need to strip out files read after they are memorised
@@ -286,7 +294,7 @@ for i in range(0, max_turns):
 
     print(f"Length of chat_history: {len(chat_history)}")
 
-    print(f"\nResponse:")
+    print("\nResponse:")
     print(f"Stop Reason: {message.stop_reason}")
     print(f"Content: {message.content}")
 
