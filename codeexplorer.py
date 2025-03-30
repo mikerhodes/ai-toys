@@ -20,6 +20,13 @@ parser.add_argument(
     help="Number of turns (default: 10)",
 )
 parser.add_argument(
+    "-m",
+    "--model",
+    type=str,
+    default="claude-3-7-sonnet-latest",
+    help="Anthropic model (default: claude-3-7-sonnet-latest)",
+)
+parser.add_argument(
     "path",
     nargs="?",
     default=".",
@@ -28,21 +35,24 @@ parser.add_argument(
 args = parser.parse_args()
 
 max_turns = args.num_turns
+chat_model = args.model
 
+# MODEL = "claude-3-7-sonnet-latest"
+# MODEL = "claude-3-5-haiku-latest"
 
 api_key = os.environ.get("ANTHROPIC_API_KEY")
 if not api_key:
     logger.error("Set ANTHROPIC_API_KEY")
     exit(1)
 client = anthropic.Anthropic(api_key=api_key)
-MODEL = "claude-3-7-sonnet-latest"
-# MODEL = "claude-3-5-haiku-latest"
 
 # Let Claude expore this folder for now
 pwd = Path(args.path).absolute()
 jail = pwd
 
-logger.info("Config: turns: %d, path: %s", max_turns, jail)
+logger.info(
+    "Config: turns: %d, path: %s, model: %s", max_turns, jail, chat_model
+)
 
 
 #
@@ -54,28 +64,6 @@ def print_working_directory() -> str:
     return str(pwd.absolute())
 
 
-def list_working_directory() -> str:
-    result = []
-    for p in pwd.iterdir():
-        if p.name.startswith("."):
-            continue
-        result.append(
-            {"name": p.name, "type": "directory" if p.is_dir() else "file"}
-        )
-    return json.dumps(result)
-
-
-def change_working_directory(cd: str) -> str:
-    global pwd
-    d = Path(cd).absolute()
-    if not d.exists():
-        return f"ERROR: Path {cd} does not exist; working directory is still {pwd}"
-    if jail not in d.parents:
-        return f"ERROR: Path {cd} must have {jail} as an ancestor"
-    pwd = d
-    return f"Working directory is now {pwd}"
-
-
 def read_file(fpath: str) -> str:
     p = Path(fpath).absolute()
     if not p.exists():
@@ -84,6 +72,42 @@ def read_file(fpath: str) -> str:
         return f"ERROR: Path {p} must have {jail} as an ancestor"
     with open(fpath, "r") as f:
         return f.read()
+
+
+def list_directory_tree(root_dir):
+    root = Path(root_dir)
+    if not root.exists():
+        return f"ERROR: Path {root} does not exist"
+    if not root.is_dir():
+        return f"ERROR: Path {root} is not a directory"
+    if root != jail and jail not in root.parents:
+        return f"ERROR: Path {root} must have {jail} as an ancestor"
+
+    result = [str(root.absolute().resolve()) + "/"]
+
+    def _tree(dir_path: Path, prefix=""):
+        paths = sorted(
+            list(dir_path.iterdir()), key=lambda p: (not p.is_dir(), p.name)
+        )
+
+        count = len(paths)
+        for i, path in enumerate(paths):
+            if path.name.startswith("."):
+                continue
+            is_last = i == count - 1
+            connector = "└── " if is_last else "├── "
+
+            result.append(
+                f"{prefix}{connector}{path.name}"
+                + ("/" if path.is_dir() else "")
+            )
+
+            if path.is_dir():
+                ext_prefix = prefix + ("    " if is_last else "│   ")
+                _tree(path, ext_prefix)
+
+    _tree(root)
+    return "\n".join(result)
 
 
 memories = []
@@ -107,31 +131,34 @@ tools = [
         },
     },
     {
-        "name": "list_working_directory",
+        "name": "list_directory_tree",
         "description": """
-            List the entries in the working directory.
+            List the complete file tree for path, including subdirectories.
 
-            Entries will be returned as JSON:
+            The passed path MUST be a directory, not a file.
 
-            [{"type": "file", "name":"Makefile"}, {"type": "directory", "name":"src"}, ]
-        """,
-        "input_schema": {
-            "type": "object",
-            "properties": {},
-            "required": [],
-        },
-    },
-    {
-        "name": "change_working_directory",
-        "description": """
-            Change the working directory.
+            Use this tool to discover the files in the codebase. Once you know the files in the codebase, use the tree to construct the absolute paths to files.
+
+            Here is an example tree, with a python project in a src directory:
+
+            /full/path/to/folder/
+            ├── src/
+            │   └── mypackage/
+            │       ├── entrypoint.py
+            │       └── main.py
+            ├── LICENSE
+            ├── README.md
+            ├── pyproject.toml
+            └── uv.lock
+
+            Real trees are likely to be much larger.
         """,
         "input_schema": {
             "type": "object",
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Absolute path for the new working directory",
+                    "description": "Absolute path to list files",
                 }
             },
             "required": ["path"],
@@ -183,10 +210,8 @@ def process_tool_call(tool_name: str, tool_input: Dict[str, str]) -> str:
     match tool_name:
         case "print_working_directory":
             return print_working_directory()
-        case "change_working_directory":
-            return change_working_directory(tool_input["path"])
-        case "list_working_directory":
-            return list_working_directory()
+        case "list_directory_tree":
+            return list_directory_tree(tool_input["path"])
         case "read_file":
             return read_file(tool_input["path"])
         case "add_memory":
@@ -197,11 +222,11 @@ def process_tool_call(tool_name: str, tool_input: Dict[str, str]) -> str:
 prompt = """
 You are a programmer exploring a codebase. The aim is to find out what the program does and the key functions in the code base.
 
-You have access to tools that tell you your working directory, list files, change working directory and read files. Use these tools to explore the code in the directory.
+You have access to tools that tell you your working directory, list files, read files. Use these tools to explore the code in the directory.
 
 You will initially be in the root directory of the project. Use the print_working_directory tool to find out the name of the directory. You must stay within this directory and not try to change to a directory outside this directory.
 
-The best way to explore the code is to list the files in the directory using the list_working_directory tool. Choose an important looking code file, like main.py, and read it. See if it tells you the purpose of the program. Read other files if needed to understand the purpose of the program. You might also look at README.md to understand the purpose of the program.
+The best way to explore the code is to list the files in the directory using the list_directory_tree tool. Choose an important looking code file, like main.py, and read it. See if it tells you the purpose of the program. Read other files if needed to understand the purpose of the program. You might also look at README.md to understand the purpose of the program.
 
 Once you've found the purpose of the program, read any additional files to find the important functions. Stop reading files once the purpose of the program is clear.
 
@@ -214,8 +239,10 @@ prompt_message = {"role": "user", "content": prompt}
 print(f"\n{'=' * 50}\nInitial prompt: {prompt}\n{'=' * 50}")
 
 chat_history = []
+num_turns = 0
 
 for i in range(0, max_turns):
+    num_turns += 1
     print(f"\n{'=' * 50}")
 
     memories_message = "\n".join([f"<memory>{x}</memory>" for x in memories])
@@ -226,7 +253,7 @@ for i in range(0, max_turns):
         cache_prompt["content"][0]["cache_control"] = {"type": "ephemeral"}
 
     message = client.messages.create(
-        model=MODEL,
+        model=chat_model,
         max_tokens=4096,
         messages=[
             prompt_message,
@@ -282,3 +309,7 @@ for i in range(0, max_turns):
         )
         print(message.content[0].text)
         break
+
+logger.info("Config: max turns: %d, path: %s", max_turns, jail)
+logger.info("Took %d turns", num_turns)
+logger.info("Using %s model", chat_model)
