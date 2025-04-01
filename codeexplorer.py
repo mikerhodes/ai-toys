@@ -10,6 +10,7 @@ from anthropic.types import MessageParam, ToolUnionParam
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.prompt import Prompt
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -239,10 +240,22 @@ Once you have found the important functions, print out an explanation of the cod
 - The key functions in the program.
 """
 
+# TODO Could we just put the root folder into the prompt rather than
+# making the model ask for it?
+
 chat_history = []
 num_turns = 0
 
+
 console = Console()
+
+extras = Prompt.ask(
+    "Anything you'd like Claude to think about (eg, plan how to do X)",
+    console=console,
+)
+
+if extras:
+    prompt = "\n\n".join([prompt, extras])
 
 console.print(Panel(Markdown(prompt), title="Prompt"))
 
@@ -288,6 +301,13 @@ for i in range(0, max_turns):
         tools=cast(Iterable[ToolUnionParam], tools),
     )
 
+    logger.info(
+        "cache_creation_input_tokens: %d, cache_read_input_tokens: %d, input_tokens: %d",
+        message.usage.cache_creation_input_tokens,
+        message.usage.cache_read_input_tokens,
+        message.usage.input_tokens,
+    )
+
     # TODO need to strip out files read after they are memorised
     # if len(chat_history) > 8:
     #     chat_history = chat_history[-8:]
@@ -299,9 +319,12 @@ for i in range(0, max_turns):
     print(f"Content: {message.content}")
 
     if message.stop_reason == "tool_use":
-        text_block = next(
-            block for block in message.content if block.type == "text"
-        )
+        try:
+            text_block = next(
+                block for block in message.content if block.type == "text"
+            )
+        except StopIteration:
+            text_block = None  # sometimes the model has nothing to say
         tool_use = next(
             block for block in message.content if block.type == "tool_use"
         )
@@ -310,7 +333,7 @@ for i in range(0, max_turns):
 
         md = Markdown(
             tool_use_markdown.format(
-                text=text_block.text,
+                text=text_block.text if text_block else "",
                 tool_name=tool_name,
                 tool_input=tool_input,
             )
