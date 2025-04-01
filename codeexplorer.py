@@ -20,8 +20,8 @@ parser.add_argument(
     "-n",
     "--num-turns",
     type=int,
-    default=10,
-    help="Number of turns (default: 10)",
+    default=20,
+    help="Number of turns (default: 20)",
 )
 parser.add_argument(
     "-m",
