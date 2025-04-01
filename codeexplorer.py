@@ -1,3 +1,11 @@
+"""
+codeexplorer.py
+
+Implements an agent-model to allow LLM to explore a codebase
+using tools, rather than trying to pre-create a large context
+from the codebase ourselves.
+"""
+
 import argparse
 import copy
 import logging
