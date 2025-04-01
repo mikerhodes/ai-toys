@@ -51,7 +51,7 @@ if not api_key:
 client = anthropic.Anthropic(api_key=api_key)
 
 # Let Claude expore this folder for now
-pwd = Path(args.path).absolute()
+pwd = Path(args.path).resolve()
 jail = pwd
 
 logger.info(
