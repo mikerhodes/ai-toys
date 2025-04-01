@@ -90,13 +90,40 @@ with col1:
     uploaded_file = st.file_uploader("upload", type=["txt", "md"])
     if uploaded_file is not None:
         st.session_state.cv = uploaded_file.getvalue().decode("utf-8")
-    st.text_area("CV", key="cv", height=400)
+    st.text_area("CV (markdown is best)", key="cv", height=400)
 
 with col2:
-    st.text_area("Job description", key="jobdesc", height=400)
+    st.text_area(
+        "Job description (markdown is best)", key="jobdesc", height=400
+    )
 
-if st.button("Evaluate CV against Job Description as a Helper"):
-    with st.spinner("Claude is copyediting your markdown..."):
+st.session_state.do_task = None
+
+
+do_task = False
+do_prompt = None
+
+cols = st.columns(4)
+
+with cols[0]:
+    if st.button("Evaluate CV against Job Description as a Helper"):
+        do_task = True
+        do_prompt = EVALUATE_HELPER_PROMPT
+with cols[1]:
+    if st.button("Evaluate CV against Job Description as a Hiring Manager"):
+        do_task = True
+        do_prompt = EVALUATE_PROMPT
+with cols[2]:
+    if st.button("Provide CV recommendations for job description"):
+        do_prompt = IMPROVE_PROMPT
+        do_task = True
+with cols[3]:
+    if st.button("Provide cover letter help for this job description"):
+        do_prompt = COVER_PROMPT
+        do_task = True
+
+if do_task and do_prompt:
+    with st.spinner("Claude is carrying out your task..."):
         try:
             # Initialize the Claude client
             # You should store your API key in st.secrets or as an environment variable
@@ -119,120 +146,7 @@ if st.button("Evaluate CV against Job Description as a Helper"):
                 messages=[
                     {
                         "role": "user",
-                        "content": EVALUATE_HELPER_PROMPT.format(
-                            cv=st.session_state.cv,
-                            jobdesc=st.session_state.jobdesc,
-                        ),
-                    }
-                ],
-            )
-
-            # Store the copyedited content
-            st.session_state.evaluation = response.content[0].text
-
-        except Exception as e:
-            st.error(f"Error during copyediting: {str(e)}")
-if st.button("Evaluate CV against Job Description as a Hiring Manager"):
-    with st.spinner("Claude is copyediting your markdown..."):
-        try:
-            # Initialize the Claude client
-            # You should store your API key in st.secrets or as an environment variable
-            api_key = os.environ.get("ANTHROPIC_API_KEY")
-
-            if not api_key:
-                st.error(
-                    "No API key found. Please set the ANTHROPIC_API_KEY in Streamlit secrets or environment variables."
-                )
-                logger.error("Set ANTHROPIC_API_KEY")
-                st.stop()
-
-            client = anthropic.Anthropic(api_key=api_key)
-
-            # Call Claude with the appropriate prompt
-            response = client.messages.create(
-                model="claude-3-7-sonnet-latest",
-                max_tokens=4000,
-                temperature=0.5,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": EVALUATE_PROMPT.format(
-                            cv=st.session_state.cv,
-                            jobdesc=st.session_state.jobdesc,
-                        ),
-                    }
-                ],
-            )
-
-            # Store the copyedited content
-            st.session_state.evaluation = response.content[0].text
-
-        except Exception as e:
-            st.error(f"Error during copyediting: {str(e)}")
-
-if st.button("Provide CV recommendations for job description"):
-    with st.spinner("Claude is copyediting your markdown..."):
-        try:
-            # Initialize the Claude client
-            # You should store your API key in st.secrets or as an environment variable
-            api_key = os.environ.get("ANTHROPIC_API_KEY")
-
-            if not api_key:
-                st.error(
-                    "No API key found. Please set the ANTHROPIC_API_KEY in Streamlit secrets or environment variables."
-                )
-                logger.error("Set ANTHROPIC_API_KEY")
-                st.stop()
-
-            client = anthropic.Anthropic(api_key=api_key)
-
-            # Call Claude with the appropriate prompt
-            response = client.messages.create(
-                model="claude-3-7-sonnet-latest",
-                max_tokens=4000,
-                temperature=0.5,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": IMPROVE_PROMPT.format(
-                            cv=st.session_state.cv,
-                            jobdesc=st.session_state.jobdesc,
-                        ),
-                    }
-                ],
-            )
-
-            # Store the copyedited content
-            st.session_state.evaluation = response.content[0].text
-
-        except Exception as e:
-            st.error(f"Error during copyediting: {str(e)}")
-
-if st.button("Provide cover letter help for this job description"):
-    with st.spinner("Claude is copyediting your markdown..."):
-        try:
-            # Initialize the Claude client
-            # You should store your API key in st.secrets or as an environment variable
-            api_key = os.environ.get("ANTHROPIC_API_KEY")
-
-            if not api_key:
-                st.error(
-                    "No API key found. Please set the ANTHROPIC_API_KEY in Streamlit secrets or environment variables."
-                )
-                logger.error("Set ANTHROPIC_API_KEY")
-                st.stop()
-
-            client = anthropic.Anthropic(api_key=api_key)
-
-            # Call Claude with the appropriate prompt
-            response = client.messages.create(
-                model="claude-3-7-sonnet-latest",
-                max_tokens=4000,
-                temperature=0.5,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": COVER_PROMPT.format(
+                        "content": do_prompt.format(
                             cv=st.session_state.cv,
                             jobdesc=st.session_state.jobdesc,
                         ),
@@ -247,4 +161,6 @@ if st.button("Provide cover letter help for this job description"):
             st.error(f"Error during copyediting: {str(e)}")
 
 if "evaluation" in st.session_state:
-    st.write(st.session_state.evaluation)
+    _, c, _ = st.columns([1, 3, 1])
+    with c:
+        st.write(st.session_state.evaluation)
