@@ -32,9 +32,9 @@ Evaluate this CV against the job description.
 </jobdescription>
 """
 EVALUATE_PROMPT = """
-Imagine you are a senior hiring manager for a tech firm.
+Imagine you are a senior hiring manager for a tech firm. You are rushed off your feet and don't have much time to read the CV. In a quick scan, does it meet the job description?
 
-Evaluate this CV against the job description.
+Evaluate the CV from this point of view, whether it would stand out as worth taking forward from a large set of applicants. Provide feedback on the CV from this point of view.
 
 <cv>
 {cv}
@@ -45,7 +45,7 @@ Evaluate this CV against the job description.
 </jobdescription>
 """
 IMPROVE_PROMPT = """
-Imagine you are a senior recruitment partner.
+Imagine you are a senior recruitment partner. There are a lot of applicants for this role, and you want to help your candidate stand out from the field.
 
 Provide recommendations to this candidate for how to improve their CV to match the given role. Think about:
 
