@@ -9,8 +9,10 @@ without fail, going to be the one you edited last because presumably
 you are editing it concurrently with the copy edit session.
 """
 
+import argparse
 import logging
 import os
+from pathlib import Path
 
 from typing import Optional
 
@@ -20,7 +22,16 @@ import streamlit as st
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-PATH = "/Users/mike/code/gh/mikerhodes/dx13-hugo/content"
+parser = argparse.ArgumentParser(description="Copy edit tool")
+parser.add_argument(
+    "path",
+    nargs="?",
+    default=".",
+    help="Path to markdown files (default: current directory)",
+)
+args = parser.parse_args()
+
+PATH = Path(args.path).resolve()
 
 st.set_page_config(layout="wide")
 
@@ -155,9 +166,7 @@ with tab1:
     f = find_most_recent_file(PATH)
 
     if f:
-        st.info(
-            f"Loaded file `{f.lstrip(PATH)}`.", icon=":material/article:"
-        )
+        st.info(f"Loaded file `{Path(f).name}`.", icon=":material/article:")
 
     foo = st.empty()
 
