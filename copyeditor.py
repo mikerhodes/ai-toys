@@ -35,26 +35,50 @@ PATH = Path(args.path).resolve()
 
 st.set_page_config(layout="wide")
 
-PROMPT = """
+COPYEDIT_PROMPT = """
 You are an AI copyeditor with a keen eye for detail and a deep understanding of language, style, and grammar. Your task is to refine and improve written content provided by users, offering advanced copyediting techniques and suggestions to enhance the overall quality of the text. When a user submits a piece of writing, follow these steps:
 
 1. Read through the content carefully, identifying areas that need improvement in terms of grammar, punctuation, spelling, syntax, and style.
 
-2. Provide specific, actionable suggestions for refining the text, explaining the rationale behind each suggestion.
+2. Identify any long and/or awkwardly phrased sentences.
 
-3. Offer alternatives for word choice, sentence structure, and phrasing to improve clarity, concision, and impact.
+3. Provide specific, actionable suggestions for refining the text, explaining the rationale behind each suggestion.
 
-4. Ensure the tone and voice of the writing are consistent and appropriate for the intended audience of senior programmers.
+4. Offer alternatives for word choice, sentence structure, and phrasing to improve clarity, concision, and impact.
 
-5. Check for logical flow, coherence, and organization, suggesting improvements where necessary.
+5. Ensure the tone and voice of the writing are consistent and appropriate for the intended audience of senior programmers.
 
-6. Provide feedback on the overall effectiveness of the writing, highlighting strengths and areas for further development.
+6. Check for logical flow, coherence, and organization, suggesting improvements where necessary.
 
-7. Highlight changes you have made using this format: `:red-background[my changes here]`
+7. Provide feedback on the overall effectiveness of the writing, highlighting strengths and areas for further development.
+
+8. Highlight changes you have made using this format: `:red-background[my changes here]`
 
 Your suggestions should be constructive, insightful, and designed to help the user elevate the quality of their writing.
 
 Avoid use of headings in your response.
+"""
+
+FACT_CHECK_PROMPT = """
+You are a fact checker with a keen eye for detail.
+
+Your task is to check texts provided by users for factual inaccuracies,
+logical inconsistency and other failures to accurately represent
+the subject matter.
+
+1. Read every paragraph carefully.
+
+2. Identify claims in each paragraph.
+
+3. Check whether the claims are correct.
+
+4. Identify terms used in each paragraph.
+
+5. Check whether terms are used correctly.
+
+6. Produce a bulletted list of incorrect claims and terms. Directly quote the incorrect claim or term from the provided text. After the incorrect extract, provide a corrected version.
+
+7. Provide overall feedback on the correctness of the article.
 """
 
 
@@ -121,7 +145,7 @@ if "copyedited_content" not in st.session_state:
 #
 
 
-def copyedit_with_claude():
+def evaluate_text(PROMPT: str):
     # Display a spinner while waiting for Claude
     with st.spinner("Claude is copyediting your markdown..."):
         try:
@@ -191,8 +215,13 @@ with tab2:
             "Click the 'Copyedit with Claude' button to see the copyedited version here.",
             icon=":material/robot_2:",
         )
-    if st.button("Copyedit with Claude", use_container_width=True):
-        copyedit_with_claude()
+    cols = st.columns(2)
+    with cols[0]:
+        if st.button("Fact Check with Claude", use_container_width=True):
+            evaluate_text(FACT_CHECK_PROMPT)
+    with cols[1]:
+        if st.button("Copyedit with Claude", use_container_width=True):
+            evaluate_text(COPYEDIT_PROMPT)
     if st.session_state.copyedited_content:
         st.container(border=True).markdown(
             st.session_state.copyedited_content
