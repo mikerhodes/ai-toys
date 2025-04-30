@@ -13,8 +13,9 @@ import os
 from pathlib import Path
 from typing import Dict, Iterable, cast
 
-import anthropic
-from anthropic.types import MessageParam, ToolUnionParam
+import ibm_watsonx_ai as wai
+import ibm_watsonx_ai.foundation_models as waifm
+from ibm_watsonx_ai.wml_client_error import WMLClientError
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -52,11 +53,48 @@ chat_model = args.model
 # MODEL = "claude-3-7-sonnet-latest"
 # MODEL = "claude-3-5-haiku-latest"
 
-api_key = os.environ.get("ANTHROPIC_API_KEY")
-if not api_key:
-    logger.error("Set ANTHROPIC_API_KEY")
+if v := os.environ.get("WATSONX_IAM_API_KEY"):
+    wxapikey = v
+else:
+    logger.error("WATSONX_IAM_API_KEY")
     exit(1)
-client = anthropic.Anthropic(api_key=api_key)
+
+if v := os.environ.get("WATSONX_PROJECT"):
+    wxproject_id = v
+else:
+    logger.error("WATSONX_PROJECT")
+    exit(1)
+
+if v := os.environ.get("WATSONX_URL"):
+    wxendpoint = v
+else:
+    logger.error("WATSONX_URL")
+    exit(1)
+
+if v := os.environ.get("WATSONX_MODEL"):
+    wxmodel = v
+else:
+    wxmodel = "meta-llama/llama-3-3-70b-instruct"
+
+credentials = wai.Credentials(
+    url=wxendpoint,
+    api_key=wxapikey,
+)
+wxclient = wai.APIClient(credentials)
+
+params = {
+    "time_limit": 10000,
+    "max_tokens": 4096,
+}  # hopefully enough tokens for SQL
+wxmodel = waifm.ModelInference(
+    model_id=wxmodel,
+    api_client=wxclient,
+    params=params,
+    project_id=wxproject_id,
+    space_id=None,
+    verify=True,
+)
+
 
 # Let Claude expore this folder for now
 pwd = Path(args.path).resolve()
@@ -76,7 +114,7 @@ def print_working_directory() -> str:
     return str(pwd.absolute())
 
 
-def read_file(path: str) -> str:
+def read_file_path(path: str) -> str:
     p = Path(path).absolute()
     if not p.exists():
         return f"ERROR: Path {path} does not exist"
@@ -136,7 +174,7 @@ tools = [
         "description": """
             Return the absolute path of the working directory.
         """,
-        "input_schema": {
+        "parameters": {
             "type": "object",
             "properties": {},
             "required": [],
@@ -165,7 +203,7 @@ tools = [
 
             Real trees are likely to be much larger.
         """,
-        "input_schema": {
+        "parameters": {
             "type": "object",
             "properties": {
                 "path": {
@@ -177,16 +215,16 @@ tools = [
         },
     },
     {
-        "name": "read_file",
+        "name": "read_file_path",
         "description": """
             Read a file.
         """,
-        "input_schema": {
+        "parameters": {
             "type": "object",
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Absolute path to a file to read",
+                    "description": "Absolute path to a file",
                 }
             },
             "required": ["path"],
@@ -217,6 +255,8 @@ tools = [
     # },
 ]
 
+wxtools = [{"type": "function", "function": x} for x in tools]
+
 
 def process_tool_call(tool_name: str, tool_input: Dict[str, str]) -> str:
     match tool_name:
@@ -224,8 +264,8 @@ def process_tool_call(tool_name: str, tool_input: Dict[str, str]) -> str:
             return print_working_directory()
         case "list_directory_tree":
             return list_directory_tree(tool_input["path"])
-        case "read_file":
-            return read_file(tool_input["path"])
+        case "read_file_path":
+            return read_file_path(tool_input["path"])
         # case "add_memory":
         #     return add_memory(tool_input["memory"])
     return f"Error: no tool with name {tool_name}"
@@ -238,7 +278,7 @@ You have access to tools that tell you your working directory, list files, read 
 
 You will initially be in the root directory of the project. Use the print_working_directory tool to find out the name of the directory. You must stay within this directory and not try to change to a directory outside this directory.
 
-The best way to explore the code is to list the files in the directory using the list_directory_tree tool. Choose an important looking code file, like main.py, and read it. See if it tells you the purpose of the program. Read other files if needed to understand the purpose of the program. You might also look at README.md to understand the purpose of the program.
+The best way to explore the code is to list the files in the directory using the list_directory_tree tool. Choose some important looking code files in the source tree and use the the read_file_path tool to read the files. Read more files if needed to understand the purpose of the program. You might also look at README.md to understand the purpose of the program.
 
 Once you've found the purpose of the program, read any additional files to find the important functions. Stop reading files once the purpose of the program is clear.
 
@@ -291,7 +331,7 @@ for i in range(0, max_turns):
     cache_prompt = None
     if chat_history:
         cache_prompt = copy.deepcopy(chat_history[-1])
-        cache_prompt["content"][0]["cache_control"] = {"type": "ephemeral"}
+        # cache_prompt["content"][0]["cache_control"] = {"type": "ephemeral"}
 
     messages = (
         [
@@ -302,19 +342,24 @@ for i in range(0, max_turns):
         + ([cache_prompt] if cache_prompt else [])
     )
 
-    message = client.messages.create(
-        model=chat_model,
-        max_tokens=4096,
-        messages=cast(Iterable[MessageParam], messages),
-        tools=cast(Iterable[ToolUnionParam], tools),
+    # message = client.messages.create(
+    #     model=chat_model,
+    #     max_tokens=4096,
+    #     messages=cast(Iterable[MessageParam], messages),
+    #     tools=cast(Iterable[ToolUnionParam], tools),
+    # )
+
+    message = wxmodel.chat(
+        messages=messages,
+        tools=wxtools,
     )
 
-    logger.info(
-        "cache_creation_input_tokens: %d, cache_read_input_tokens: %d, input_tokens: %d",
-        message.usage.cache_creation_input_tokens,
-        message.usage.cache_read_input_tokens,
-        message.usage.input_tokens,
-    )
+    # logger.info(
+    #     "cache_creation_input_tokens: %d, cache_read_input_tokens: %d, input_tokens: %d",
+    #     message.usage.cache_creation_input_tokens,
+    #     message.usage.cache_read_input_tokens,
+    #     message.usage.input_tokens,
+    # )
 
     # TODO need to strip out files read after they are memorised
     # if len(chat_history) > 8:
@@ -322,26 +367,23 @@ for i in range(0, max_turns):
 
     print(f"Length of chat_history: {len(chat_history)}")
 
-    print("\nResponse:")
-    print(f"Stop Reason: {message.stop_reason}")
-    print(f"Content: {message.content}")
+    choice = message["choices"][0]
 
-    if message.stop_reason == "tool_use":
-        try:
-            text_block = next(
-                block for block in message.content if block.type == "text"
-            )
-        except StopIteration:
-            text_block = None  # sometimes the model has nothing to say
-        tool_use = next(
-            block for block in message.content if block.type == "tool_use"
-        )
-        tool_name = tool_use.name
-        tool_input = cast(Dict[str, str], tool_use.input)
+    print("\nResponse:")
+    print(f"Stop Reason: {choice['finish_reason']}")
+    print(f"Content: {choice['message']}")
+
+    if choice["finish_reason"] == "tool_calls":
+        tool_call = choice["message"]["tool_calls"][0]
+        f = tool_call["function"]
+        tool_name = f["name"]
+        import json
+
+        tool_input = cast(Dict[str, str], json.loads(f["arguments"]))
 
         md = Markdown(
             tool_use_markdown.format(
-                text=text_block.text if text_block else "",
+                text="",  # text_block.text if text_block else "",
                 tool_name=tool_name,
                 tool_input=tool_input,
             )
@@ -353,32 +395,24 @@ for i in range(0, max_turns):
 
         tool_result = process_tool_call(tool_name, tool_input)
 
-        # print(f"Tool Result: {tool_result[:200]}")
+        print(f"Tool Result: {tool_result[:200]}")
 
-        chat_history.append(
-            {"role": "assistant", "content": message.content}
-        )
+        # Watsonx / llama doesn't seem to send a message
+        # chat_history.append(
+        #     {"role": "assistant", "content": message.content}
+        # )
         chat_history.append(
             {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": tool_use.id,
-                        "content": tool_result,
-                    }
-                ],
+                "role": "tool",
+                "tool_call_id": tool_call["id"],
+                "content": tool_result,
             }
         )
     else:
         chat_history.append(
-            {"role": "assistant", "content": message.content}
+            {"role": "assistant", "content": choice["message"]["content"]}
         )
-        text_block = next(
-            block for block in message.content if block.type == "text"
-        )
-
-        md = Markdown(text_block.text)
+        md = Markdown(choice["message"]["content"])
         console.print(Panel(md, title="Code exploration result"))
         break
 
