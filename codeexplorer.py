@@ -272,7 +272,7 @@ def process_tool_call(tool_name: str, tool_input: Dict[str, str]) -> str:
 
 
 prompt = """
-You are a programmer exploring a codebase. The aim is to find out what the program does and the key functions in the code base.
+You are a programmer exploring a codebase.
 
 You have access to tools that tell you your working directory, list files, read files. Use these tools to explore the code in the directory.
 
@@ -280,12 +280,9 @@ You will initially be in the root directory of the project. Use the print_workin
 
 The best way to explore the code is to list the files in the directory using the list_directory_tree tool. Choose some important looking code files in the source tree and use the the read_file_path tool to read the files. Read more files if needed to understand the purpose of the program. You might also look at README.md to understand the purpose of the program.
 
-Once you've found the purpose of the program, read any additional files to find the important functions. Stop reading files once the purpose of the program is clear.
+Take your time and be sure you've looked at everything you need to understand the program and answer the user's question below.
 
-Once you have found the important functions, print out an explanation of the codebase:
-
-- The purpose of the entire program.
-- The key functions in the program.
+Here's the user's question:
 """
 
 # TODO Could we just put the root folder into the prompt rather than
