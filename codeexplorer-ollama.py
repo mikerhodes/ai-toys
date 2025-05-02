@@ -107,6 +107,8 @@ def list_directory_simple(path: str) -> str:
             result.append(str(path.absolute()))
 
         for path in [x for x in dir_path.iterdir() if x.is_dir()]:
+            if path.name.startswith("."):
+                continue
             if path.is_dir():
                 _tree(path)
 
