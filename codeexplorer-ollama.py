@@ -217,8 +217,6 @@ You are a programmer exploring a codebase.
 
 You have access to tools that tell you your working directory, list files, read files. Use these tools to explore the code in the directory.
 
-You will initially be in the root directory of the project. Use the print_working_directory tool to find out the name of the directory. You must stay within this directory and not try to change to a directory outside this directory.
-
 The best way to explore the code is to list the files in the directory using the list_directory_simple tool. It will return a list of all files in the directory tree, including subdirectories.
 
 Choose some important looking code files in the source tree and use the the read_file_path tool to read the files. Read more files if needed to understand the purpose of the program.
