@@ -21,6 +21,7 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 
 logging.basicConfig(level=logging.INFO)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 parser = argparse.ArgumentParser(description="Code explorer tool")
@@ -37,6 +38,20 @@ parser.add_argument(
     type=str,
     default="claude-3-7-sonnet-latest",
     help="Anthropic model (default: claude-3-7-sonnet-latest)",
+)
+parser.add_argument(
+    "-p",
+    "--prompt",
+    type=str,
+    default=None,
+    help="Question to answer using codebase (default: prompt user for question)",
+)
+parser.add_argument(
+    "-o",
+    "--output",
+    type=str,
+    default=None,
+    help="Write final output to file (default: write only to terminal)",
 )
 parser.add_argument(
     "path",
@@ -86,7 +101,11 @@ def read_file(path: str) -> str:
         return f.read()
 
 
-def list_directory_tree(path: str) -> str:
+def list_directory_simple(path: str) -> str:
+    """
+    Return a list of files in the directory and subdirectories as a
+    list of absolute file paths, one path per line.
+    """
     root = Path(path)
     if not root.exists():
         return f"ERROR: Path {root} does not exist"
@@ -95,30 +114,22 @@ def list_directory_tree(path: str) -> str:
     if root != jail and jail not in root.parents:
         return f"ERROR: Path {root} must have {jail} as an ancestor"
 
-    result = [str(root.absolute().resolve()) + "/"]
+    result = []
 
-    def _tree(dir_path: Path, prefix=""):
-        paths = sorted(
-            list(dir_path.iterdir()), key=lambda p: (not p.is_dir(), p.name)
-        )
-
-        count = len(paths)
-        for i, path in enumerate(paths):
+    def _tree(dir_path: Path):
+        for path in [x for x in dir_path.iterdir() if x.is_file()]:
             if path.name.startswith("."):
                 continue
-            is_last = i == count - 1
-            connector = "└── " if is_last else "├── "
+            result.append(str(path.absolute()))
 
-            result.append(
-                f"{prefix}{connector}{path.name}"
-                + ("/" if path.is_dir() else "")
-            )
-
+        for path in [x for x in dir_path.iterdir() if x.is_dir()]:
+            if path.name.startswith("."):
+                continue
             if path.is_dir():
-                ext_prefix = prefix + ("    " if is_last else "│   ")
-                _tree(path, ext_prefix)
+                _tree(path)
 
     _tree(root)
+    result = sorted(result)
     return "\n".join(result)
 
 
@@ -132,38 +143,24 @@ def list_directory_tree(path: str) -> str:
 
 tools = [
     {
-        "name": "print_working_directory",
-        "description": """
-            Return the absolute path of the working directory.
-        """,
-        "input_schema": {
-            "type": "object",
-            "properties": {},
-            "required": [],
-        },
-    },
-    {
-        "name": "list_directory_tree",
+        "name": "list_directory_simple",
         "description": """
             List the complete file tree for path, including subdirectories.
 
             The passed path MUST be a directory, not a file.
 
-            Use this tool to discover the files in the codebase. Once you know the files in the codebase, use the tree to construct the absolute paths to files.
+            Use this tool to discover the files in the codebase. The returned value is a list of absolute paths. Use these paths to explore the codebase.
 
             Here is an example tree, with a python project in a src directory:
 
-            /full/path/to/folder/
-            ├── src/
-            │   └── mypackage/
-            │       ├── entrypoint.py
-            │       └── main.py
-            ├── LICENSE
-            ├── README.md
-            ├── pyproject.toml
-            └── uv.lock
+            /Users/mike/code/pythonapp/src/mypackage/entrypoint.py
+            /Users/mike/code/pythonapp/src/mypackage/main.py
+            /Users/mike/code/pythonapp/LICENSE
+            /Users/mike/code/pythonapp/README.md
+            /Users/mike/code/pythonapp/pyproject.toml
+            /Users/mike/code/pythonapp/uv.lock
 
-            Real trees are likely to be much larger.
+            Real lists are likely to be much larger!
         """,
         "input_schema": {
             "type": "object",
@@ -220,10 +217,8 @@ tools = [
 
 def process_tool_call(tool_name: str, tool_input: Dict[str, str]) -> str:
     match tool_name:
-        case "print_working_directory":
-            return print_working_directory()
-        case "list_directory_tree":
-            return list_directory_tree(tool_input["path"])
+        case "list_directory_simple":
+            return list_directory_simple(tool_input["path"])
         case "read_file":
             return read_file(tool_input["path"])
         # case "add_memory":
@@ -231,21 +226,22 @@ def process_tool_call(tool_name: str, tool_input: Dict[str, str]) -> str:
     return f"Error: no tool with name {tool_name}"
 
 
-prompt = """
-You are a programmer exploring a codebase. The aim is to find out what the program does and the key functions in the code base.
+prompt = f"""
+You are a programmer exploring a codebase.
 
 You have access to tools that tell you your working directory, list files, read files. Use these tools to explore the code in the directory.
 
-You will initially be in the root directory of the project. Use the print_working_directory tool to find out the name of the directory. You must stay within this directory and not try to change to a directory outside this directory.
+The best way to explore the code is to list the files in the directory using the list_directory_simple tool. It will return a list of all files in the directory tree, including subdirectories.
 
-The best way to explore the code is to list the files in the directory using the list_directory_tree tool. Choose an important looking code file, like main.py, and read it. See if it tells you the purpose of the program. Read other files if needed to understand the purpose of the program. You might also look at README.md to understand the purpose of the program.
+Choose some important looking code files in the source tree and use the the read_file_path tool to read the files. Read more files if needed to understand the purpose of the program.
 
-Once you've found the purpose of the program, read any additional files to find the important functions. Stop reading files once the purpose of the program is clear.
+If the read_file_path tool fails, double check the path you passed in!
 
-Once you have found the important functions, print out an explanation of the codebase:
+Take your time and be sure you've looked at everything you need to understand the program and answer the user's question below.
 
-- The purpose of the entire program.
-- The key functions in the program.
+The project root directory is: {Path(args.path).resolve()}
+
+Here's the user's question:
 """
 
 # TODO Could we just put the root folder into the prompt rather than
@@ -257,13 +253,20 @@ num_turns = 0
 
 console = Console()
 
-extras = Prompt.ask(
-    "Anything you'd like Claude to think about (eg, plan how to do X)",
-    console=console,
-)
 
-if extras:
-    prompt = "\n\n".join([prompt, extras])
+if not args.prompt:
+    extras = Prompt.ask(
+        "Anything you'd like AI to think about (eg, plan how to do X)",
+        console=console,
+    )
+
+    if extras:
+        prompt = "\n\n".join([prompt, extras])
+    else:
+        # create a default question
+        prompt = "\n\n".join([prompt, "Please explain this codebase"])
+else:
+    prompt = "\n\n".join([prompt, args.prompt])
 
 console.print(Panel(Markdown(prompt), title="Prompt"))
 
@@ -304,12 +307,12 @@ for i in range(0, max_turns):
 
     message = client.messages.create(
         model=chat_model,
-        max_tokens=4096,
+        max_tokens=8192,
         messages=cast(Iterable[MessageParam], messages),
         tools=cast(Iterable[ToolUnionParam], tools),
     )
 
-    logger.info(
+    logger.debug(
         "cache_creation_input_tokens: %d, cache_read_input_tokens: %d, input_tokens: %d",
         message.usage.cache_creation_input_tokens,
         message.usage.cache_read_input_tokens,
@@ -320,11 +323,11 @@ for i in range(0, max_turns):
     # if len(chat_history) > 8:
     #     chat_history = chat_history[-8:]
 
-    print(f"Length of chat_history: {len(chat_history)}")
+    logger.debug(f"Length of chat_history: {len(chat_history)}")
 
-    print("\nResponse:")
-    print(f"Stop Reason: {message.stop_reason}")
-    print(f"Content: {message.content}")
+    logger.debug("\nResponse:")
+    logger.debug(f"Stop Reason: {message.stop_reason}")
+    logger.debug(f"Content: {message.content}")
 
     if message.stop_reason == "tool_use":
         try:
@@ -380,6 +383,11 @@ for i in range(0, max_turns):
 
         md = Markdown(text_block.text)
         console.print(Panel(md, title="Code exploration result"))
+        if args.output:
+            with open(
+                Path(args.output).absolute(), "w", encoding="utf-8"
+            ) as f:
+                f.write(text_block.text)
         break
 
 logger.info("Config: max turns: %d, path: %s", max_turns, jail)
