@@ -19,6 +19,7 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 
 logging.basicConfig(level=logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 parser = argparse.ArgumentParser(description="Code explorer tool")
@@ -61,7 +62,9 @@ args = parser.parse_args()
 max_turns = args.num_turns
 chat_model = args.model
 
-# Let Claude expore this folder for now
+ollama_client = ollama.Client()
+
+# Let model expore this folder for now
 pwd = Path(args.path).resolve()
 jail = pwd
 
@@ -117,14 +120,6 @@ def list_directory_simple(path: str) -> str:
     return "\n".join(result)
 
 
-# memories = []
-
-
-# def add_memory(memory: str) -> str:
-#     memories.append(memory)
-#     return "Added memory"
-
-
 tools = [
     {
         "name": "list_directory_simple",
@@ -173,29 +168,6 @@ tools = [
             "required": ["path"],
         },
     },
-    # {
-    #     "name": "add_memory",
-    #     "description": """
-    #         Add a memory about the code base. The data in memory will be sent back to you in your prompt. To avoid calling tools again and again, use the memory to note down information about the results of each step.
-    #         Examples:
-    #         <memory>
-    #         main.py: this contains the functions main, read_foo, write_bar. main contains the main program code. read_foo reads the foo file from disk. write_bar writes to the cloud service bar.
-    #         </memory>
-    #         <memory>
-    #         the files in /the/root/path are main.py, helper.py, readme.md
-    #         </memory>
-    #     """,
-    #     "input_schema": {
-    #         "type": "object",
-    #         "properties": {
-    #             "memory": {
-    #                 "type": "string",
-    #                 "description": "Memory to add",
-    #             }
-    #         },
-    #         "required": ["memory"],
-    #     },
-    # },
 ]
 
 wxtools = [{"type": "function", "function": x} for x in tools]
@@ -207,8 +179,6 @@ def process_tool_call(tool_name: str, tool_input: Dict[str, str]) -> str:
             return list_directory_simple(tool_input["path"])
         case "read_file_path":
             return read_file_path(tool_input["path"])
-        # case "add_memory":
-        #     return add_memory(tool_input["memory"])
     return f"Error: no tool with name {tool_name}"
 
 
@@ -230,9 +200,6 @@ The project root directory is: {Path(args.path).resolve()}
 Here's the user's question:
 """
 
-# TODO Could we just put the root folder into the prompt rather than
-# making the model ask for it?
-
 chat_history = []
 num_turns = 0
 
@@ -253,7 +220,6 @@ if not args.prompt:
 else:
     prompt = "\n\n".join([prompt, args.prompt])
 
-
 console.print(Panel(Markdown(prompt), title="Prompt"))
 
 # dedented markdown to use when formatting each tool use message
@@ -271,8 +237,6 @@ Tool Result:
 """
 
 
-ollama_client = ollama.Client()
-
 for i in range(0, max_turns):
     num_turns += 1
     logger.debug(f"\n{'=' * 50}")
@@ -284,15 +248,12 @@ for i in range(0, max_turns):
     messages = (
         [
             {"role": "user", "content": prompt},
-            # {"role": "user", "content": memories_message},
         ]
         + chat_history[:-1]
         + ([cache_prompt] if cache_prompt else [])
     )
 
-    # logger.debug(messages)
-
-    logger.debug("Messaging ollama")
+    logger.debug("Messaging model")
     message = ollama_client.chat(
         model=chat_model,
         messages=messages,
@@ -301,7 +262,6 @@ for i in range(0, max_turns):
             num_ctx=16384,
         ),
     )
-    # logger.debug(message)
 
     logger.debug(f"Length of chat_history: {len(chat_history)}")
 
@@ -331,8 +291,6 @@ for i in range(0, max_turns):
         )
         console.print(Panel(md, title="Turn"))
 
-        # logger.debug(f"Tool Result:\n{tool_result}")
-
         chat_history.append(
             {
                 "role": "tool",
@@ -341,16 +299,17 @@ for i in range(0, max_turns):
             }
         )
     else:
+        chat_history.append(
+            {
+                "role": "assistant",
+                "content": choice.message.content,
+            }
+        )
+
         message = (
             choice["message"]["content"]
             .replace("<think>", "`<think>`")
             .replace("</think>", "`</think>`")
-        )
-        chat_history.append(
-            {
-                "role": "assistant",
-                "content": message,
-            }
         )
         md = Markdown(message)
         console.print(Panel(md, title="Code exploration result"))

@@ -64,16 +64,13 @@ args = parser.parse_args()
 max_turns = args.num_turns
 chat_model = args.model
 
-# MODEL = "claude-3-7-sonnet-latest"
-# MODEL = "claude-3-5-haiku-latest"
-
 api_key = os.environ.get("ANTHROPIC_API_KEY")
 if not api_key:
     logger.error("Set ANTHROPIC_API_KEY")
     exit(1)
 client = anthropic.Anthropic(api_key=api_key)
 
-# Let Claude expore this folder for now
+# Let model expore this folder for now
 pwd = Path(args.path).resolve()
 jail = pwd
 
@@ -85,10 +82,6 @@ logger.info(
 #
 # Tools
 #
-
-
-def print_working_directory() -> str:
-    return str(pwd.absolute())
 
 
 def read_file(path: str) -> str:
@@ -131,14 +124,6 @@ def list_directory_simple(path: str) -> str:
     _tree(root)
     result = sorted(result)
     return "\n".join(result)
-
-
-# memories = []
-
-
-# def add_memory(memory: str) -> str:
-#     memories.append(memory)
-#     return "Added memory"
 
 
 tools = [
@@ -189,29 +174,6 @@ tools = [
             "required": ["path"],
         },
     },
-    # {
-    #     "name": "add_memory",
-    #     "description": """
-    #         Add a memory about the code base. The data in memory will be sent back to you in your prompt. To avoid calling tools again and again, use the memory to note down information about the results of each step.
-    #         Examples:
-    #         <memory>
-    #         main.py: this contains the functions main, read_foo, write_bar. main contains the main program code. read_foo reads the foo file from disk. write_bar writes to the cloud service bar.
-    #         </memory>
-    #         <memory>
-    #         the files in /the/root/path are main.py, helper.py, readme.md
-    #         </memory>
-    #     """,
-    #     "input_schema": {
-    #         "type": "object",
-    #         "properties": {
-    #             "memory": {
-    #                 "type": "string",
-    #                 "description": "Memory to add",
-    #             }
-    #         },
-    #         "required": ["memory"],
-    #     },
-    # },
 ]
 
 
@@ -221,8 +183,6 @@ def process_tool_call(tool_name: str, tool_input: Dict[str, str]) -> str:
             return list_directory_simple(tool_input["path"])
         case "read_file":
             return read_file(tool_input["path"])
-        # case "add_memory":
-        #     return add_memory(tool_input["memory"])
     return f"Error: no tool with name {tool_name}"
 
 
@@ -243,9 +203,6 @@ The project root directory is: {Path(args.path).resolve()}
 
 Here's the user's question:
 """
-
-# TODO Could we just put the root folder into the prompt rather than
-# making the model ask for it?
 
 chat_history = []
 num_turns = 0
@@ -277,20 +234,16 @@ tool_use_markdown = """
 Tool Used: `{tool_name}`
 
 Tool Input: `{tool_input}`
+```
+{tool_result}
+```
 """
 
 for i in range(0, max_turns):
     num_turns += 1
     print(f"\n{'=' * 50}")
 
-    # memories_message = "\n".join([f"<memory>{x}</memory>" for x in memories])
-
-    # For each turn, we want to tell the Anthropic API that we
-    # want to cache up to this point, so we can reuse it on the
-    # next turn. We don't want to end up with the cache directive
-    # in every turn, however, so create a copy of the last message
-    # and add the cache control to it --- this ensures that we only
-    # ever have the cache control block in the latest message.
+    # Cache to last prompt to speed up future inference
     cache_prompt = None
     if chat_history:
         cache_prompt = copy.deepcopy(chat_history[-1])
@@ -299,12 +252,12 @@ for i in range(0, max_turns):
     messages = (
         [
             {"role": "user", "content": prompt},
-            # {"role": "user", "content": memories_message},
         ]
         + chat_history[:-1]
         + ([cache_prompt] if cache_prompt else [])
     )
 
+    logger.debug("Messaging model")
     message = client.messages.create(
         model=chat_model,
         max_tokens=8192,
@@ -318,10 +271,6 @@ for i in range(0, max_turns):
         message.usage.cache_read_input_tokens,
         message.usage.input_tokens,
     )
-
-    # TODO need to strip out files read after they are memorised
-    # if len(chat_history) > 8:
-    #     chat_history = chat_history[-8:]
 
     logger.debug(f"Length of chat_history: {len(chat_history)}")
 
@@ -342,21 +291,19 @@ for i in range(0, max_turns):
         tool_name = tool_use.name
         tool_input = cast(Dict[str, str], tool_use.input)
 
+        tool_result = process_tool_call(tool_name, tool_input)
+
         md = Markdown(
             tool_use_markdown.format(
                 text=text_block.text if text_block else "",
                 tool_name=tool_name,
                 tool_input=tool_input,
+                tool_result="\n".join(
+                    tool_result.split("\n")[:10] + ["..."]
+                ),
             )
         )
         console.print(Panel(md, title="Turn"))
-
-        # print(f"\nTool Used: {tool_name}")
-        # print(f"Tool Input: {tool_input}")
-
-        tool_result = process_tool_call(tool_name, tool_input)
-
-        # print(f"Tool Result: {tool_result[:200]}")
 
         chat_history.append(
             {"role": "assistant", "content": message.content}
@@ -381,13 +328,16 @@ for i in range(0, max_turns):
             block for block in message.content if block.type == "text"
         )
 
-        md = Markdown(text_block.text)
+        message_text = text_block.text.replace(
+            "<think>", "`<think>`"
+        ).replace("</think>", "`</think>`")
+        md = Markdown(message_text)
         console.print(Panel(md, title="Code exploration result"))
         if args.output:
             with open(
                 Path(args.output).absolute(), "w", encoding="utf-8"
             ) as f:
-                f.write(text_block.text)
+                f.write(message_text)
         break
 
 logger.info("Config: max turns: %d, path: %s", max_turns, jail)
