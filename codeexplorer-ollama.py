@@ -10,13 +10,85 @@ import argparse
 import copy
 import logging
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Any, Tuple
 
 import ollama
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Prompt
+
+
+class OllamaAdapter:
+    def __init__(self):
+        self.ollama_client = ollama.Client()
+
+    def prepare_messages(self, chat_history):
+        cache_prompt = None
+        if chat_history:
+            cache_prompt = copy.deepcopy(chat_history[-1])
+        messages = (
+            [
+                {"role": "user", "content": prompt},
+            ]
+            + chat_history[:-1]
+            + ([cache_prompt] if cache_prompt else [])
+        )
+        return messages
+
+    def chat(self, **kwargs):
+        # message = ollama_client.chat(
+        #     model=chat_model,
+        #     messages=messages,
+        #     tools=openai_tools,
+        #     options=ollama.Options(
+        #         num_ctx=16384,
+        #     ),
+        # )
+        chat_response = self.ollama_client.chat(
+            options=ollama.Options(
+                num_ctx=16384,
+            ),
+            **kwargs,
+        )
+        logger.debug("\nResponse:")
+        logger.debug(f"Stop Reason: {chat_response['done_reason']}")
+        logger.debug(f"Content: {chat_response['message']}")
+        return chat_response
+
+    def get_response_text(self, chat_response) -> str:
+        return chat_response.message.content
+
+    def tools_for_model(self, openai_tools):
+        return openai_tools
+
+    def has_tool_use(self, chat_response):
+        return bool(chat_response.message.tool_calls)
+
+    def get_tool_use(self, chat_response) -> Tuple[str, Dict[str, str], str]:
+        tool_call = chat_response["message"]["tool_calls"][0]
+        f = tool_call["function"]
+        tool_name = f["name"]
+        tool_input = f["arguments"]
+        return tool_name, tool_input, ""
+
+    def format_assistant_history_message(self, chat_response):
+        return {
+            "role": "assistant",
+            "content": chat_response.message.content,
+        }
+
+    def format_tool_result_message(
+        self, tool_name: str, tool_use_id: str, tool_result: str
+    ) -> Dict:
+        return {
+            "role": "tool",
+            "content": tool_result,
+            "name": tool_name,
+        }
+
+
+client = OllamaAdapter()
 
 logging.basicConfig(level=logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -61,8 +133,6 @@ args = parser.parse_args()
 
 max_turns = args.num_turns
 chat_model = args.model
-
-ollama_client = ollama.Client()
 
 # Let model expore this folder for now
 pwd = Path(args.path).resolve()
@@ -169,8 +239,7 @@ tools = [
         },
     },
 ]
-
-wxtools = [{"type": "function", "function": x} for x in tools]
+openai_tools = [{"type": "function", "function": x} for x in tools]
 
 
 def process_tool_call(tool_name: str, tool_input: Dict[str, str]) -> str:
@@ -181,6 +250,20 @@ def process_tool_call(tool_name: str, tool_input: Dict[str, str]) -> str:
             return read_file_path(tool_input["path"])
     return f"Error: no tool with name {tool_name}"
 
+
+console = Console()
+
+if not args.prompt:
+    extras = Prompt.ask(
+        "Anything you'd like AI to think about (eg, plan how to do X)",
+        console=console,
+    )
+    if extras:
+        user_prompt = extras
+    else:
+        user_prompt = "Please explain this codebase"
+else:
+    user_prompt = args.prompt
 
 prompt = f"""
 You are a programmer exploring a codebase.
@@ -198,27 +281,9 @@ Take your time and be sure you've looked at everything you need to understand th
 The project root directory is: {Path(args.path).resolve()}
 
 Here's the user's question:
+
+{user_prompt}
 """
-
-chat_history = []
-num_turns = 0
-
-
-console = Console()
-
-if not args.prompt:
-    extras = Prompt.ask(
-        "Anything you'd like AI to think about (eg, plan how to do X)",
-        console=console,
-    )
-
-    if extras:
-        prompt = "\n\n".join([prompt, extras])
-    else:
-        # create a default question
-        prompt = "\n\n".join([prompt, "Please explain this codebase"])
-else:
-    prompt = "\n\n".join([prompt, args.prompt])
 
 console.print(Panel(Markdown(prompt), title="Prompt"))
 
@@ -236,52 +301,34 @@ Tool Result:
 ```
 """
 
+chat_history = []
+num_turns = 0
 
 for i in range(0, max_turns):
     num_turns += 1
     logger.debug(f"\n{'=' * 50}")
 
-    cache_prompt = None
-    if chat_history:
-        cache_prompt = copy.deepcopy(chat_history[-1])
-
-    messages = (
-        [
-            {"role": "user", "content": prompt},
-        ]
-        + chat_history[:-1]
-        + ([cache_prompt] if cache_prompt else [])
-    )
+    messages = client.prepare_messages(chat_history)
 
     logger.debug("Messaging model")
-    message = ollama_client.chat(
+    chat_response = client.chat(
         model=chat_model,
         messages=messages,
-        tools=wxtools,
-        options=ollama.Options(
-            num_ctx=16384,
-        ),
+        tools=client.tools_for_model(openai_tools),
     )
 
     logger.debug(f"Length of chat_history: {len(chat_history)}")
 
-    choice = message
-
-    logger.debug("\nResponse:")
-    logger.debug(f"Stop Reason: {choice['done_reason']}")
-    logger.debug(f"Content: {choice['message']}")
-
-    if choice.message.tool_calls:
-        tool_call = choice["message"]["tool_calls"][0]
-        f = tool_call["function"]
-        tool_name = f["name"]
-        tool_input = f["arguments"]
-
+    if client.has_tool_use(chat_response):
+        response_text = client.get_response_text(chat_response)
+        tool_name, tool_input, tool_use_id = client.get_tool_use(
+            chat_response
+        )
         tool_result = process_tool_call(tool_name, tool_input)
 
         md = Markdown(
             tool_use_markdown.format(
-                text="",  # text_block.text if text_block else "",
+                text=response_text,
                 tool_name=tool_name,
                 tool_input=tool_input,
                 tool_result="\n".join(
@@ -292,32 +339,29 @@ for i in range(0, max_turns):
         console.print(Panel(md, title="Turn"))
 
         chat_history.append(
-            {
-                "role": "tool",
-                "content": tool_result,
-                "name": tool_name,
-            }
+            client.format_assistant_history_message(chat_response)
+        )
+        chat_history.append(
+            client.format_tool_result_message(
+                tool_name, tool_use_id, tool_result
+            )
         )
     else:
         chat_history.append(
-            {
-                "role": "assistant",
-                "content": choice.message.content,
-            }
+            client.format_assistant_history_message(chat_response)
         )
-
-        message = (
-            choice["message"]["content"]
+        message_text = (
+            client.get_response_text(chat_response)
             .replace("<think>", "`<think>`")
             .replace("</think>", "`</think>`")
         )
-        md = Markdown(message)
+        md = Markdown(message_text)
         console.print(Panel(md, title="Code exploration result"))
         if args.output:
             with open(
                 Path(args.output).absolute(), "w", encoding="utf-8"
             ) as f:
-                f.write(message)
+                f.write(message_text)
         break
 
 logger.info("Config: max turns: %d, path: %s", max_turns, jail)

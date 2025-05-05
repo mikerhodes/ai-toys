@@ -11,7 +11,7 @@ import copy
 import logging
 import os
 from pathlib import Path
-from typing import Dict, Iterable, cast
+from typing import Dict, Iterable, Tuple, cast, Any
 
 import anthropic
 from anthropic.types import MessageParam, ToolUnionParam
@@ -20,7 +20,117 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Prompt
 
-logging.basicConfig(level=logging.INFO)
+
+class AnthropicAdapter:
+    def __init__(self):
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            logger.error("Set ANTHROPIC_API_KEY")
+            exit(1)
+        self.client = anthropic.Anthropic(api_key=api_key)
+
+    def prepare_messages(self, chat_history):
+        # Cache to last prompt to speed up future inference
+        cache_prompt = None
+        if chat_history:
+            cache_prompt = copy.deepcopy(chat_history[-1])
+            cache_prompt["content"][0]["cache_control"] = {
+                "type": "ephemeral"
+            }
+        messages = (
+            [
+                {"role": "user", "content": prompt},
+            ]
+            + chat_history[:-1]
+            + ([cache_prompt] if cache_prompt else [])
+        )
+        return messages
+
+    def chat(self, **kwargs):
+        # message = self.client.messages.create(
+        #     model=chat_model,
+        #     max_tokens=8192,
+        #     messages=cast(Iterable[MessageParam], messages),
+        #     tools=cast(Iterable[ToolUnionParam], tools),
+        # )
+        chat_response = self.client.messages.create(
+            max_tokens=8192, **kwargs
+        )
+        logger.debug("\nResponse:")
+        logger.debug(f"Stop Reason: {chat_response.stop_reason}")
+        logger.debug(f"Content: {chat_response.content}")
+        logger.debug(
+            "cache_creation_input_tokens: %d, cache_read_input_tokens: %d, input_tokens: %d",
+            chat_response.usage.cache_creation_input_tokens,
+            chat_response.usage.cache_read_input_tokens,
+            chat_response.usage.input_tokens,
+        )
+        return chat_response
+
+    def tools_for_model(self, openai_tools):
+        """Convert an OpenAI function tools to Anthropic's tool format."""
+
+        def convert_openai_tool_to_anthropic(openai_tool):
+            function = openai_tool.get("function", {})
+
+            return {
+                "name": function.get("name", ""),
+                "description": function.get("description", ""),
+                "input_schema": {
+                    "type": "object",
+                    "properties": function.get("parameters", {}).get(
+                        "properties", {}
+                    ),
+                    "required": function.get("parameters", {}).get(
+                        "required", []
+                    ),
+                },
+            }
+
+        return [convert_openai_tool_to_anthropic(x) for x in openai_tools]
+
+    def has_tool_use(self, message):
+        return message.stop_reason == "tool_use"
+
+    def get_response_text(self, message) -> str:
+        text_block = None
+        try:
+            text_block = next(
+                block for block in message.content if block.type == "text"
+            )
+        except StopIteration:
+            pass  # sometimes the model has nothing to say
+        return text_block.text if text_block else ""
+
+    def get_tool_use(self, message) -> Tuple[str, Dict[str, str], str]:
+        tool_use = next(
+            block for block in message.content if block.type == "tool_use"
+        )
+        tool_name = tool_use.name
+        tool_input = cast(Dict[str, str], tool_use.input)
+        return tool_name, tool_input, tool_use.id
+
+    def format_assistant_history_message(self, message):
+        return {"role": "assistant", "content": message.content}
+
+    def format_tool_result_message(
+        self, tool_name: str, tool_use_id: str, tool_result: str
+    ) -> Any:
+        return {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": tool_result,
+                }
+            ],
+        }
+
+
+client = AnthropicAdapter()
+
+logging.basicConfig(level=logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
@@ -64,12 +174,6 @@ args = parser.parse_args()
 max_turns = args.num_turns
 chat_model = args.model
 
-api_key = os.environ.get("ANTHROPIC_API_KEY")
-if not api_key:
-    logger.error("Set ANTHROPIC_API_KEY")
-    exit(1)
-client = anthropic.Anthropic(api_key=api_key)
-
 # Let model expore this folder for now
 pwd = Path(args.path).resolve()
 jail = pwd
@@ -84,7 +188,7 @@ logger.info(
 #
 
 
-def read_file(path: str) -> str:
+def read_file_path(path: str) -> str:
     p = Path(path).absolute()
     if not p.exists():
         return f"ERROR: Path {path} does not exist"
@@ -147,7 +251,7 @@ tools = [
 
             Real lists are likely to be much larger!
         """,
-        "input_schema": {
+        "parameters": {
             "type": "object",
             "properties": {
                 "path": {
@@ -159,32 +263,47 @@ tools = [
         },
     },
     {
-        "name": "read_file",
+        "name": "read_file_path",
         "description": """
             Read a file.
         """,
-        "input_schema": {
+        "parameters": {
             "type": "object",
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Absolute path to a file to read",
+                    "description": "Absolute path to a file",
                 }
             },
             "required": ["path"],
         },
     },
 ]
+openai_tools = [{"type": "function", "function": x} for x in tools]
 
 
 def process_tool_call(tool_name: str, tool_input: Dict[str, str]) -> str:
     match tool_name:
         case "list_directory_simple":
             return list_directory_simple(tool_input["path"])
-        case "read_file":
-            return read_file(tool_input["path"])
+        case "read_file_path":
+            return read_file_path(tool_input["path"])
     return f"Error: no tool with name {tool_name}"
 
+
+console = Console()
+
+if not args.prompt:
+    extras = Prompt.ask(
+        "Anything you'd like AI to think about (eg, plan how to do X)",
+        console=console,
+    )
+    if extras:
+        user_prompt = extras
+    else:
+        user_prompt = "Please explain this codebase"
+else:
+    user_prompt = args.prompt
 
 prompt = f"""
 You are a programmer exploring a codebase.
@@ -202,28 +321,9 @@ Take your time and be sure you've looked at everything you need to understand th
 The project root directory is: {Path(args.path).resolve()}
 
 Here's the user's question:
+
+{user_prompt}
 """
-
-chat_history = []
-num_turns = 0
-
-
-console = Console()
-
-
-if not args.prompt:
-    extras = Prompt.ask(
-        "Anything you'd like AI to think about (eg, plan how to do X)",
-        console=console,
-    )
-
-    if extras:
-        prompt = "\n\n".join([prompt, extras])
-    else:
-        # create a default question
-        prompt = "\n\n".join([prompt, "Please explain this codebase"])
-else:
-    prompt = "\n\n".join([prompt, args.prompt])
 
 console.print(Panel(Markdown(prompt), title="Prompt"))
 
@@ -234,68 +334,41 @@ tool_use_markdown = """
 Tool Used: `{tool_name}`
 
 Tool Input: `{tool_input}`
+
+Tool Result:
 ```
 {tool_result}
 ```
 """
 
+chat_history = []
+num_turns = 0
+
 for i in range(0, max_turns):
     num_turns += 1
-    print(f"\n{'=' * 50}")
+    logger.debug(f"\n{'=' * 50}")
 
-    # Cache to last prompt to speed up future inference
-    cache_prompt = None
-    if chat_history:
-        cache_prompt = copy.deepcopy(chat_history[-1])
-        cache_prompt["content"][0]["cache_control"] = {"type": "ephemeral"}
-
-    messages = (
-        [
-            {"role": "user", "content": prompt},
-        ]
-        + chat_history[:-1]
-        + ([cache_prompt] if cache_prompt else [])
-    )
+    messages = client.prepare_messages(chat_history)
 
     logger.debug("Messaging model")
-    message = client.messages.create(
+    chat_response = client.chat(
         model=chat_model,
-        max_tokens=8192,
-        messages=cast(Iterable[MessageParam], messages),
-        tools=cast(Iterable[ToolUnionParam], tools),
-    )
-
-    logger.debug(
-        "cache_creation_input_tokens: %d, cache_read_input_tokens: %d, input_tokens: %d",
-        message.usage.cache_creation_input_tokens,
-        message.usage.cache_read_input_tokens,
-        message.usage.input_tokens,
+        messages=messages,
+        tools=client.tools_for_model(openai_tools),
     )
 
     logger.debug(f"Length of chat_history: {len(chat_history)}")
 
-    logger.debug("\nResponse:")
-    logger.debug(f"Stop Reason: {message.stop_reason}")
-    logger.debug(f"Content: {message.content}")
-
-    if message.stop_reason == "tool_use":
-        try:
-            text_block = next(
-                block for block in message.content if block.type == "text"
-            )
-        except StopIteration:
-            text_block = None  # sometimes the model has nothing to say
-        tool_use = next(
-            block for block in message.content if block.type == "tool_use"
+    if client.has_tool_use(chat_response):
+        response_text = client.get_response_text(chat_response)
+        tool_name, tool_input, tool_use_id = client.get_tool_use(
+            chat_response
         )
-        tool_name = tool_use.name
-        tool_input = cast(Dict[str, str], tool_use.input)
-
         tool_result = process_tool_call(tool_name, tool_input)
 
         md = Markdown(
             tool_use_markdown.format(
-                text=text_block.text if text_block else "",
+                text=response_text,
                 tool_name=tool_name,
                 tool_input=tool_input,
                 tool_result="\n".join(
@@ -306,31 +379,22 @@ for i in range(0, max_turns):
         console.print(Panel(md, title="Turn"))
 
         chat_history.append(
-            {"role": "assistant", "content": message.content}
+            client.format_assistant_history_message(chat_response)
         )
         chat_history.append(
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": tool_use.id,
-                        "content": tool_result,
-                    }
-                ],
-            }
+            client.format_tool_result_message(
+                tool_name, tool_use_id, tool_result
+            )
         )
     else:
         chat_history.append(
-            {"role": "assistant", "content": message.content}
+            client.format_assistant_history_message(chat_response)
         )
-        text_block = next(
-            block for block in message.content if block.type == "text"
+        message_text = (
+            client.get_response_text(chat_response)
+            .replace("<think>", "`<think>`")
+            .replace("</think>", "`</think>`")
         )
-
-        message_text = text_block.text.replace(
-            "<think>", "`<think>`"
-        ).replace("</think>", "`</think>`")
         md = Markdown(message_text)
         console.print(Panel(md, title="Code exploration result"))
         if args.output:
