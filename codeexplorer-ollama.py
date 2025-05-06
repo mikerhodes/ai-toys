@@ -116,6 +116,7 @@ class AnthropicAdapter:
         #     messages=cast(Iterable[MessageParam], messages),
         #     tools=cast(Iterable[ToolUnionParam], tools),
         # )
+        kwargs["model"] = kwargs["model"] or "claude-3-7-sonnet-latest"
         chat_response = self.client.messages.create(
             max_tokens=8192, **kwargs
         )
