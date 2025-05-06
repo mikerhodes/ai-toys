@@ -9,9 +9,11 @@ from the codebase ourselves.
 import argparse
 import copy
 import logging
+import os
 from pathlib import Path
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, cast
 
+import anthropic
 import ollama
 from rich.console import Console
 from rich.markdown import Markdown
@@ -24,16 +26,9 @@ class OllamaAdapter:
         self.ollama_client = ollama.Client()
 
     def prepare_messages(self, chat_history):
-        cache_prompt = None
-        if chat_history:
-            cache_prompt = copy.deepcopy(chat_history[-1])
-        messages = (
-            [
-                {"role": "user", "content": prompt},
-            ]
-            + chat_history[:-1]
-            + ([cache_prompt] if cache_prompt else [])
-        )
+        messages = [
+            {"role": "user", "content": prompt},
+        ] + chat_history
         return messages
 
     def chat(self, **kwargs):
@@ -45,6 +40,7 @@ class OllamaAdapter:
         #         num_ctx=16384,
         #     ),
         # )
+        kwargs["model"] = kwargs["model"] or "qwen3:8b"
         chat_response = self.ollama_client.chat(
             options=ollama.Options(
                 num_ctx=16384,
@@ -88,7 +84,112 @@ class OllamaAdapter:
         }
 
 
-client = OllamaAdapter()
+class AnthropicAdapter:
+    def __init__(self):
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            logger.error("Set ANTHROPIC_API_KEY")
+            raise ValueError("Set ANTHROPIC_API_KEY")
+        self.client = anthropic.Anthropic(api_key=api_key)
+
+    def prepare_messages(self, chat_history):
+        # Cache to last prompt to speed up future inference
+        cache_prompt = None
+        if chat_history:
+            cache_prompt = copy.deepcopy(chat_history[-1])
+            cache_prompt["content"][0]["cache_control"] = {
+                "type": "ephemeral"
+            }
+        messages = (
+            [
+                {"role": "user", "content": prompt},
+            ]
+            + chat_history[:-1]
+            + ([cache_prompt] if cache_prompt else [])
+        )
+        return messages
+
+    def chat(self, **kwargs):
+        # message = self.client.messages.create(
+        #     model=chat_model,
+        #     max_tokens=8192,
+        #     messages=cast(Iterable[MessageParam], messages),
+        #     tools=cast(Iterable[ToolUnionParam], tools),
+        # )
+        chat_response = self.client.messages.create(
+            max_tokens=8192, **kwargs
+        )
+        logger.debug("\nResponse:")
+        logger.debug(f"Stop Reason: {chat_response.stop_reason}")
+        logger.debug(f"Content: {chat_response.content}")
+        logger.debug(
+            "cache_creation_input_tokens: %d, cache_read_input_tokens: %d, input_tokens: %d",
+            chat_response.usage.cache_creation_input_tokens,
+            chat_response.usage.cache_read_input_tokens,
+            chat_response.usage.input_tokens,
+        )
+        return chat_response
+
+    def tools_for_model(self, openai_tools):
+        """Convert an OpenAI function tools to Anthropic's tool format."""
+
+        def convert_openai_tool_to_anthropic(openai_tool):
+            function = openai_tool.get("function", {})
+
+            return {
+                "name": function.get("name", ""),
+                "description": function.get("description", ""),
+                "input_schema": {
+                    "type": "object",
+                    "properties": function.get("parameters", {}).get(
+                        "properties", {}
+                    ),
+                    "required": function.get("parameters", {}).get(
+                        "required", []
+                    ),
+                },
+            }
+
+        return [convert_openai_tool_to_anthropic(x) for x in openai_tools]
+
+    def has_tool_use(self, message):
+        return message.stop_reason == "tool_use"
+
+    def get_response_text(self, message) -> str:
+        text_block = None
+        try:
+            text_block = next(
+                block for block in message.content if block.type == "text"
+            )
+        except StopIteration:
+            pass  # sometimes the model has nothing to say
+        return text_block.text if text_block else ""
+
+    def get_tool_use(self, message) -> Tuple[str, Dict[str, str], str]:
+        tool_use = next(
+            block for block in message.content if block.type == "tool_use"
+        )
+        tool_name = tool_use.name
+        tool_input = cast(Dict[str, str], tool_use.input)
+        return tool_name, tool_input, tool_use.id
+
+    def format_assistant_history_message(self, message):
+        return {"role": "assistant", "content": message.content}
+
+    def format_tool_result_message(
+        self, tool_name: str, tool_use_id: str, tool_result: str
+    ) -> Any:
+        return {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": tool_result,
+                }
+            ],
+        }
+
 
 logging.basicConfig(level=logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -103,18 +204,25 @@ parser.add_argument(
     help="Number of turns (default: 20)",
 )
 parser.add_argument(
+    "-p",
+    "--provider",
+    type=str,
+    choices=["ollama", "anthropic"],
+    required=True,
+    help="Model provider",
+)
+parser.add_argument(
     "-m",
     "--model",
     type=str,
-    default="qwen3:8b",
-    help="Model (default: qwen3:8b)",
+    help="Model (default: provider specific)",
 )
 parser.add_argument(
-    "-p",
-    "--prompt",
+    "-t",
+    "--task",
     type=str,
     default=None,
-    help="Question to answer using codebase (default: prompt user for question)",
+    help="Task to complete using codebase (default: prompt user for question)",
 )
 parser.add_argument(
     "-o",
@@ -130,6 +238,18 @@ parser.add_argument(
     help="Path to explore (default: current directory)",
 )
 args = parser.parse_args()
+
+client: OllamaAdapter | AnthropicAdapter
+try:
+    if args.provider == "ollama":
+        client = OllamaAdapter()
+    elif args.provider == "anthropic":
+        client = AnthropicAdapter()
+    else:
+        raise ValueError("Invalid model provider")
+except Exception:
+    logger.error("Cannot load provider")
+    exit(1)
 
 max_turns = args.num_turns
 chat_model = args.model
@@ -253,17 +373,17 @@ def process_tool_call(tool_name: str, tool_input: Dict[str, str]) -> str:
 
 console = Console()
 
-if not args.prompt:
+if not args.task:
     extras = Prompt.ask(
         "Anything you'd like AI to think about (eg, plan how to do X)",
         console=console,
     )
     if extras:
-        user_prompt = extras
+        user_task = extras
     else:
-        user_prompt = "Please explain this codebase"
+        user_task = "Please explain this codebase"
 else:
-    user_prompt = args.prompt
+    user_task = args.task
 
 prompt = f"""
 You are a programmer exploring a codebase.
@@ -282,7 +402,7 @@ The project root directory is: {Path(args.path).resolve()}
 
 Here's the user's question:
 
-{user_prompt}
+{user_task}
 """
 
 console.print(Panel(Markdown(prompt), title="Prompt"))
@@ -310,12 +430,13 @@ for i in range(0, max_turns):
 
     messages = client.prepare_messages(chat_history)
 
-    logger.debug("Messaging model")
-    chat_response = client.chat(
-        model=chat_model,
-        messages=messages,
-        tools=client.tools_for_model(openai_tools),
-    )
+    with console.status("Model is working..."):
+        logger.debug("Messaging model")
+        chat_response = client.chat(
+            model=chat_model,
+            messages=messages,
+            tools=client.tools_for_model(openai_tools),
+        )
 
     logger.debug(f"Length of chat_history: {len(chat_history)}")
 
