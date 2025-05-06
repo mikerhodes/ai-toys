@@ -271,10 +271,12 @@ logger.info(
 
 def read_file_path(path: str) -> str:
     p = Path(path).absolute()
-    if not p.exists():
-        return f"ERROR: Path {path} does not exist"
     if jail not in p.parents:
         return f"ERROR: Path {p} must have {jail} as an ancestor"
+    if not p.exists():
+        return f"ERROR: Path {path} does not exist"
+    if not p.is_file():
+        return f"ERROR: Path {path} is not a file"
     with open(path, "r") as f:
         return f.read()
 
@@ -285,12 +287,12 @@ def list_directory_simple(path: str) -> str:
     list of absolute file paths, one path per line.
     """
     root = Path(path)
+    if root != jail and jail not in root.parents:
+        return f"ERROR: Path {root} must have {jail} as an ancestor"
     if not root.exists():
         return f"ERROR: Path {root} does not exist"
     if not root.is_dir():
         return f"ERROR: Path {root} is not a directory"
-    if root != jail and jail not in root.parents:
-        return f"ERROR: Path {root} must have {jail} as an ancestor"
 
     result = []
 
