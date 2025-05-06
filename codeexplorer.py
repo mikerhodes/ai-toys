@@ -219,6 +219,12 @@ parser.add_argument(
     help="Model (default: provider specific)",
 )
 parser.add_argument(
+    "-e",
+    "--allow-edits",
+    action="store_true",
+    help="Allow model to create and edit files (default: false)",
+)
+parser.add_argument(
     "-t",
     "--task",
     type=str,
@@ -286,9 +292,9 @@ def list_directory_simple(path: str) -> str:
     Return a list of files in the directory and subdirectories as a
     list of absolute file paths, one path per line.
     """
-    root = Path(path)
+    root = Path(path).absolute()
     if root != jail and jail not in root.parents:
-        return f"ERROR: Path {root} must have {jail} as an ancestor"
+        return f"ERROR: Path {path} must have {jail} as an ancestor"
     if not root.exists():
         return f"ERROR: Path {root} does not exist"
     if not root.is_dir():
@@ -311,6 +317,50 @@ def list_directory_simple(path: str) -> str:
     _tree(root)
     result = sorted(result)
     return "\n".join(result)
+
+
+def str_replace(path: str, old_str: str, new_str: str) -> str:
+    p = Path(path).absolute()
+    if p != jail and jail not in p.parents:
+        return f"ERROR: Path {path} must have {jail} as an ancestor"
+    if not p.exists():
+        return f"ERROR: Path {path} does not exist"
+    if not p.is_file():
+        return f"ERROR: Path {path} is not a file"
+    with open(path, "r") as f:
+        content = f.read()
+
+    occurances = content.count(old_str)
+    if occurances == 0:
+        return (
+            "Error: No match found for replacement."
+            + " Please check your text and try again."
+        )
+    if occurances > 1:
+        return (
+            f"Error: Found {occurances} matches for replacement text."
+            + " Please provide more context to make a unique match."
+        )
+
+    new_content = content.replace(old_str, new_str, 1)
+
+    with open(path, "w") as f:
+        f.write(new_content)
+
+    return "Success editing file"
+
+
+def create(path: str, file_text: str) -> str:
+    p = Path(path).absolute()
+    if p != jail and jail not in p.parents:
+        return f"ERROR: Path {path} must have {jail} as an ancestor"
+    if p.exists():
+        return (
+            f"ERROR: Path {path} already exists; choose another file name."
+        )
+    with open(path, "w") as f:
+        f.write(file_text)
+    return "Success creating file"
 
 
 tools = [
@@ -362,6 +412,57 @@ tools = [
         },
     },
 ]
+if args.allow_edits:
+    tools.append(
+        {
+            "name": "str_replace",
+            "description": """
+            Edit a file by specifying an exact existing string and its replacement.
+        """,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute path to a file",
+                    },
+                    "old_str": {
+                        "type": "string",
+                        "description": "Exact string to replace",
+                    },
+                    "new_str": {
+                        "type": "string",
+                        "description": "Exact replacement string",
+                    },
+                },
+                "required": ["path"],
+            },
+        }
+    )
+    tools.append(
+        {
+            "name": "create",
+            "description": """
+            Create a file, supplying its contents.
+
+            If the file already exists, this function will fail.
+            """,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute path to a file.",
+                    },
+                    "file_text": {
+                        "type": "string",
+                        "description": "Text content for new file",
+                    },
+                },
+                "required": ["path"],
+            },
+        }
+    )
 openai_tools = [{"type": "function", "function": x} for x in tools]
 
 
@@ -371,6 +472,17 @@ def process_tool_call(tool_name: str, tool_input: Dict[str, str]) -> str:
             return list_directory_simple(tool_input["path"])
         case "read_file_path":
             return read_file_path(tool_input["path"])
+        case "str_replace":
+            return str_replace(
+                tool_input["path"],
+                tool_input["old_str"],
+                tool_input["new_str"],
+            )
+        case "create":
+            return create(
+                tool_input["path"],
+                tool_input["file_text"],
+            )
     return f"Error: no tool with name {tool_name}"
 
 
