@@ -10,8 +10,9 @@ import argparse
 import copy
 import logging
 import os
+import subprocess
 from pathlib import Path
-from typing import Dict, Any, Tuple, cast
+from typing import Any, Dict, Tuple, cast
 
 import anthropic
 import ollama
@@ -269,6 +270,36 @@ logger.info(
     "Config: turns: %d, path: %s, model: %s", max_turns, jail, chat_model
 )
 
+#
+# Helpers
+#
+
+
+def is_git_working_copy_clean(directory: Path) -> bool:
+    """
+    Returns True if working copy is clean or not a git repo, False otherwise
+    """
+    try:
+        status = subprocess.run(
+            ["git", "-C", str(directory), "status", "--porcelain"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+
+        if status.returncode == 128:
+            # Exit code 128 means "not a git repository" or
+            # non-existent directory
+            return True
+
+        # Empty output means working copy is clean
+        return status.returncode == 0 and not status.stdout.strip()
+
+    except Exception as e:
+        print(f"Error checking git status: {e}")
+        return False
+
 
 #
 # Tools
@@ -412,7 +443,13 @@ tools = [
         },
     },
 ]
+
+
 if args.allow_edits:
+    if not is_git_working_copy_clean(Path(args.path)):
+        print("To edit, git working directory must be clean:", args.path)
+        exit(1)
+
     tools.append(
         {
             "name": "str_replace",
