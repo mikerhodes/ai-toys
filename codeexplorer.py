@@ -528,7 +528,10 @@ tool_use_markdown = """
 
 Tool Used: `{tool_name}`
 
-Tool Input: `{tool_input}`
+Tool Input:
+```json
+{tool_input}
+```
 
 Tool Result:
 ```
@@ -562,14 +565,14 @@ for i in range(0, max_turns):
         )
         tool_result = process_tool_call(tool_name, tool_input)
 
+        import json
+
         md = Markdown(
             tool_use_markdown.format(
                 text=response_text,
                 tool_name=tool_name,
-                tool_input=tool_input,
-                tool_result="\n".join(
-                    tool_result.split("\n")[:10] + ["..."]
-                ),
+                tool_input=json.dumps(tool_input, indent=2),
+                tool_result="\n".join(tool_result.split("\n")[:5] + ["..."]),
             )
         )
         console.print(Panel(md, title="Turn"))
