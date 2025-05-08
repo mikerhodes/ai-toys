@@ -8,6 +8,7 @@ from the codebase ourselves.
 
 import argparse
 import copy
+import json
 import logging
 import os
 import subprocess
@@ -16,6 +17,9 @@ from typing import Any, Dict, Tuple, cast
 
 import anthropic
 import ollama
+import ibm_watsonx_ai as wai
+import ibm_watsonx_ai.foundation_models as waifm
+from ibm_watsonx_ai.wml_client_error import WMLClientError
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -193,6 +197,104 @@ class AnthropicAdapter:
         }
 
 
+class WatsonxAdapter:
+    def __init__(self):
+        self.ollama_client = ollama.Client()
+        if v := os.environ.get("WATSONX_IAM_API_KEY"):
+            wxapikey = v
+        else:
+            logger.error("WATSONX_IAM_API_KEY")
+            raise ValueError("WATSONX_IAM_API_KEY")
+
+        if v := os.environ.get("WATSONX_PROJECT"):
+            self.wxproject_id = v
+        else:
+            logger.error("WATSONX_PROJECT")
+            raise ValueError("WATSONX_PROJECT")
+
+        if v := os.environ.get("WATSONX_URL"):
+            wxendpoint = v
+        else:
+            logger.error("WATSONX_URL")
+            raise ValueError("WATSONX_URL")
+
+        credentials = wai.Credentials(
+            url=wxendpoint,
+            api_key=wxapikey,
+        )
+        self.wxclient = wai.APIClient(credentials)
+
+    def prepare_messages(self, chat_history):
+        messages = [
+            {"role": "user", "content": prompt},
+        ] + chat_history
+        return messages
+
+    def chat(self, **kwargs):
+        kwargs["model"] = (
+            kwargs["model"] or "meta-llama/llama-3-3-70b-instruct"
+        )
+        params = {
+            "time_limit": 30000,
+            "max_tokens": 8192,
+        }
+        wxmodel = waifm.ModelInference(
+            model_id=kwargs["model"],
+            api_client=self.wxclient,
+            params=params,
+            project_id=self.wxproject_id,
+            space_id=None,
+            verify=True,
+        )
+        chat_response = wxmodel.chat(
+            messages=kwargs["messages"],
+            tools=kwargs["tools"],
+        )
+        # logger.debug("\nResponse:")
+        # logger.debug(f"Stop Reason: {chat_response['done_reason']}")
+        # logger.debug(f"Content: {chat_response['message']}")
+        return chat_response
+
+    def get_response_text(self, chat_response) -> str:
+        try:
+            return chat_response["choices"][0]["message"]["content"]
+        except KeyError:
+            return ""
+
+    def tools_for_model(self, openai_tools):
+        return openai_tools
+
+    def has_tool_use(self, chat_response) -> bool:
+        try:
+            return (
+                len(chat_response["choices"][0]["message"]["tool_calls"]) > 0
+            )
+        except KeyError:
+            return False
+
+    def get_tool_use(self, chat_response) -> Tuple[str, Dict[str, str], str]:
+        tool_call = chat_response["choices"][0]["message"]["tool_calls"][0]
+        f = tool_call["function"]
+        tool_name = f["name"]
+        tool_input = json.loads(f["arguments"])
+        return tool_name, tool_input, tool_call["id"]
+
+    def format_assistant_history_message(self, chat_response):
+        return {
+            "role": "assistant",
+            "content": self.get_response_text(chat_response),
+        }
+
+    def format_tool_result_message(
+        self, tool_name: str, tool_use_id: str, tool_result: str
+    ) -> Dict:
+        return {
+            "role": "tool",
+            "tool_call_id": tool_use_id,
+            "content": tool_result,
+        }
+
+
 logging.basicConfig(level=logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
@@ -209,7 +311,7 @@ parser.add_argument(
     "-p",
     "--provider",
     type=str,
-    choices=["ollama", "anthropic"],
+    choices=["ollama", "anthropic", "watsonx"],
     required=True,
     help="Model provider",
 )
@@ -247,12 +349,14 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
-client: OllamaAdapter | AnthropicAdapter
+client: OllamaAdapter | AnthropicAdapter | WatsonxAdapter
 try:
     if args.provider == "ollama":
         client = OllamaAdapter()
     elif args.provider == "anthropic":
         client = AnthropicAdapter()
+    elif args.provider == "watsonx":
+        client = WatsonxAdapter()
     else:
         raise ValueError("Invalid model provider")
 except Exception:
@@ -601,8 +705,6 @@ for i in range(0, max_turns):
             chat_response
         )
         tool_result = process_tool_call(tool_name, tool_input)
-
-        import json
 
         md = Markdown(
             tool_use_markdown.format(
