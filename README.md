@@ -8,20 +8,6 @@ While my app [rapport] was a great way for me to learn to write a chat experienc
 
 It uses the Anthropic API; to try the apps out you need an Anthropic API key.
 
-## codeexplorer
-
-An experiment in using the model as an agent. Provided a root directory for a project, it will explore that directory and sub-directories to understand the code inside it using tools provided within the script.
-
-It will print out a project summary when it's confident in its understanding.
-
-The user has an opportunity to ask for extra details, such as how to add a feature to the codebase.
-
-Run using:
-
-```
-uv run codeexplorer.py /path/to/code
-```
-
 ## copyeditor
 
 A streamlined way to get feedback on markdown as you edit it.
@@ -49,3 +35,14 @@ Run using:
 ```
 uv run streamlit run cvevaluator.py
 ```
+
+## codeexplorer
+
+An experiment in using the model as an agent. Provided a root directory for a project, it will explore that directory and sub-directories to understand the code inside it using tools provided within the script.
+
+It will print out a project summary when it's confident in its understanding.
+
+The user has an opportunity to ask for extra details, such as how to add a feature to the codebase.
+
+> [!IMPORTANT]
+> Code explorer now has its own repo: https://github.com/mikerhodes/ai-codeexplorer/
