@@ -26,7 +26,6 @@ import streamlit as st
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
 # Set page configuration
 st.set_page_config(
     page_title="AI Image Generator", page_icon="🎨", layout="wide"
@@ -62,6 +61,7 @@ def generate_image(
     size=None,
     quality=None,
     background="auto",
+    uploaded_images=None,
 ) -> Optional[bytes]:
     client = openai.OpenAI(api_key=api_key)
 
@@ -71,15 +71,29 @@ def generate_image(
     start_time = time.time()
 
     try:
-        response = client.images.generate(
-            model="gpt-image-1",
-            prompt=prompt,
-            size=size,
-            quality=quality,  # type: ignore
-            output_format="png",
-            background=background,  # type: ignore
-            n=1,
-        )
+        if uploaded_images:
+            logger.info("Editing image...")
+            response = client.images.edit(
+                model="gpt-image-1",
+                image=uploaded_images,
+                prompt=prompt,
+                size=size,
+                quality=quality,  # type: ignore
+                background=background,  # type: ignore
+                n=1,
+            )
+        else:
+            logger.info("Creating a new image...")
+            response = client.images.generate(
+                model="gpt-image-1",
+                prompt=prompt,
+                size=size,
+                quality=quality,  # type: ignore
+                output_format="png",
+                background=background,  # type: ignore
+                n=1,
+                moderation="low",
+            )
         time_taken = time.time() - start_time
         logger.info(f"OpenAI image call took {time_taken:.4f} seconds")
         if not response.data:
@@ -97,7 +111,7 @@ def generate_image(
         return None
 
 
-def process_image_generation(prompt):
+def process_image_generation(prompt, uploaded_images):
     with st.spinner("Generating image...", show_time=True):
         try:
             # Generate the image with DALL-E 3
@@ -107,6 +121,7 @@ def process_image_generation(prompt):
                 size=image_size,
                 quality=image_quality,
                 background=image_background,
+                uploaded_images=uploaded_images,
             )
 
             if result is None:
@@ -134,6 +149,11 @@ if not api_key:
 
 col1, col2 = st.columns([1, 1], gap="large")
 with col1:
+    uploaded_files = st.file_uploader(
+        "(Optional) Upload image(s) to edit",
+        accept_multiple_files=True,
+        type=["png", "webp", "jpg"],
+    )
     user_prompt = st.text_area(
         "Image description",
         height=200,
@@ -196,10 +216,12 @@ with col1:
 if regenerate_button:
     if st.session_state.last_user_prompt:
         # Regenerate using the same prompt
-        process_image_generation(st.session_state.last_user_prompt)
+        process_image_generation(
+            st.session_state.last_user_prompt, uploaded_files
+        )
     elif user_prompt:
         # If no previous prompt but user has entered a new one
-        process_image_generation(user_prompt)
+        process_image_generation(user_prompt, uploaded_files)
     else:
         st.error(
             "No prompt available for regeneration. Please enter a prompt first."
@@ -208,7 +230,7 @@ if regenerate_button:
 with col2:
     # Process generation when button is clicked
     if generate_button and user_prompt:
-        process_image_generation(user_prompt)
+        process_image_generation(user_prompt, uploaded_files)
 
     # Display the generated image or error message
     if st.session_state.error_message:
