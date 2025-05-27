@@ -1,10 +1,4 @@
-# imagegen-dalle3 is a bit of a frankenstein's code thing.
-#
-# I'm not sure the idea of getting GPT-4 to improve the prompt
-# is a good one, as dall-e 3 already does something like that.
-# Also Claude's idea to get the improvement back as a tool call
-# to a non-existent is kind of neat, but also a bit odd. But
-# it does ensure that the model is providing what we want.
+# imagegen-gpt4o is a bit of a frankenstein's code thing.
 #
 # The Streamlit code is a bit messy too, but I've cleaned it
 # up and reworked the UX a whole lot from Claude's original
