@@ -141,7 +141,7 @@ if not api_key:
         icon="⚠️",
     )
 
-col1, col2 = st.columns([1, 1], gap="large")
+col1, col2 = st.columns([1, 2], gap="large")
 with col1:
     uploaded_files = st.file_uploader(
         "(Optional) Upload image(s) to edit",
@@ -152,8 +152,9 @@ with col1:
         "Image description",
         height=200,
         value=textwrap.dedent("""
-        Generate an anime-style image of a gigantic cat striding through
-        a lush forest, brightly lit with sunshine. The cat looks really
+        Generate an anime-style image of a gigantic
+        cat striding through a lush forest, brightly
+        lit with sunshine. The cat looks really
         cute even though it is huge. 
         """).strip(),
     )
