@@ -17,7 +17,10 @@ from typing import Optional, cast
 import openai
 import streamlit as st
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s [%(name)s %(funcName)s] %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 # Set page configuration
@@ -153,9 +156,11 @@ with col1:
         height=200,
         value=textwrap.dedent("""
         Generate an anime-style image of a gigantic
-        cat striding through a lush forest, brightly
-        lit with sunshine. The cat looks really
-        cute even though it is huge. 
+        slightly thin black cat striding through a
+        lush forest, brightly lit with sunshine. The
+        cat looks really cute even though it is huge.
+        It has a little bit of tongue showing. The cat
+        has light green eyes.
         """).strip(),
     )
 
