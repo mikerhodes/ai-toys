@@ -140,8 +140,8 @@ if do_task and do_prompt:
 
             # Call Claude with the appropriate prompt
             response = client.messages.create(
-                model="claude-3-7-sonnet-latest",
-                max_tokens=4000,
+                model="claude-sonnet-4-0",
+                max_tokens=5000,
                 temperature=0.5,
                 messages=[
                     {
